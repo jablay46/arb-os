@@ -181,20 +181,20 @@ contract MorphoArbExecutorTest is Test {
         assertEq(weth.balanceOf(address(vaultV3)), 1_000_000e18, "loan settled back");
     }
 
-    function test_balancer_v3_honours_non_zero_fee() public {
-        vaultV3.setFeePercentage(0.001e18); // 0.1%
-        uint256 fee = (LOAN * 0.001e18) / 1e18; // 1 WETH
-
+    function test_balancer_v3_charges_no_fee() public {
+        // V3 has no flash-loan fee at all: a flash loan is an unbalanced-then-rebalanced
+        // transient delta with no fee term. The executor must therefore repay exactly the
+        // principal, and the Vault must end with exactly what it started with.
         Types.ExecutionRequest memory request =
             _request(Types.LoanProvider.BalancerV3, 1.05e18, MIN_PROFIT);
 
+        uint256 vaultBefore = weth.balanceOf(address(vaultV3));
         uint256 treasuryBefore = weth.balanceOf(treasury);
         vm.prank(operator);
         executor.execute(request);
 
-        // Profit is net of the fee, so it must be 1 WETH lower than the fee-free case.
-        assertEq(weth.balanceOf(treasury) - treasuryBefore, 102.5e18 - fee, "fee deducted");
-        assertEq(weth.balanceOf(address(vaultV3)), 1_000_000e18 + fee, "vault kept the fee");
+        assertEq(weth.balanceOf(treasury) - treasuryBefore, 102.5e18, "full profit, no fee");
+        assertEq(weth.balanceOf(address(vaultV3)), vaultBefore, "vault balance unchanged");
     }
 
     // ------------------------------------------------------------------

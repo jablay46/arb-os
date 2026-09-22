@@ -233,3 +233,57 @@ Prinsip integrasi penting:
 - **Rekomendasi:** bangun **satu proyek gabungan** dengan B sebagai tulang punggung,
   C sebagai lapisan keamanan + strategi likuidasi, dan A sebagai lapisan discovery +
   observabilitas, mengikuti roadmap di §3.4.
+
+---
+
+## 5. Hasil Fase 1 (status: selesai)
+
+Skeleton Foundry di root repo ini mengimplementasikan `MorphoArbExecutor` dengan tiga
+jalur flash loan. Semua 32 test hijau: 25 unit test (mock) + 7 fork test (Base mainnet).
+
+### 5.1 Bug yang ditemukan test, bukan review
+
+| # | Bug | Dampak kalau lolos |
+|---|---|---|
+| 1 | `amountIn` hasil resolusi tidak ditulis balik ke step | adapter diminta swap nol pada route multi-leg |
+| 2 | Profit diukur dari return value adapter, bukan delta saldo | adapter yang bohong bisa lolos `minProfit` |
+| 3 | Urutan repayment ketiga provider disamakan | satu provider pasti gagal; loss bisa terbaca profit |
+| 4 | Hanya `profit` yang di-sweep | saldo lama tertinggal di kontrak |
+| 5 | Route rugi di-clamp jadi nol | loss terlihat seperti sukses |
+| 6 | `OPERATOR_ROLE` di-grant saat konstruksi | cold key bisa memicu trade selamanya |
+
+Bug #1–#5 ketahuan dari test; #6 dari desain.
+
+### 5.2 Temuan Balancer V3 (dari fork test)
+
+Dua koreksi yang hanya bisa ketahuan dari kontrak asli:
+
+1. **`getFlashLoanFeePercentage()` tidak ada di V3.** Fungsi ini sempat ditulis di
+   `IBalancer.sol` dan dipanggil executor — itu fabrikasi. Tidak ada satu pun file terkait
+   flash loan di seluruh monorepo Balancer V3: fee flash loan di V3 secara struktural nol,
+   karena flash loan hanyalah transient delta yang di-rebalance. Executor sekarang
+   hardcode `fee = 0` dan mock-nya sengaja tidak punya getter itu. Di V2 fee memang ada,
+   tapi di `ProtocolFeesCollector` dan saat ini `0` di Base.
+
+2. **`unlock(data)` adalah `msg.sender.functionCall(data)`.** Jadi `data` harus berupa
+   calldata lengkap ke callback sendiri, bukan encoding request mentah. Versi pertama
+   mengirim bytes request langsung; Vault asli meng-dispatch-nya sebagai call kosong dan
+   revert `FailedInnerCall`. Mock lama memanggil callback secara langsung sehingga bug ini
+   lolos dari 25 unit test — hanya fork test yang menangkapnya. Mock sekarang memakai
+   `Address.functionCall` dan `settle` berbasis delta saldo nyata, persis seperti Vault.
+
+Pelajaran: mock yang memaafkan lebih berbahaya daripada tidak ada mock, karena memberi
+rasa aman yang salah.
+
+### 5.3 Yang masih terbuka
+
+- **Belum ada adapter DEX nyata.** `IAdapter` + `ForkProfitAdapter` membuktikan executor
+  memanggil adapter dengan benar, tapi Uniswap V3/Aerodrome/Slipstream/1inch belum ditulis.
+  Tanpa ini belum ada yang bisa dieksekusi di chain.
+- **Belum ada scanner off-chain.** Port discovery dari repo A/Rust (fase 2–3) belum dimulai.
+- **Fork test belum menguji route dua-leg dengan harga nyata.** Saat ini route-nya
+  sintetis (1:1 + tip) karena dislokasi harga tidak bisa diasumsikan ada di blok tertentu.
+  Yang diuji adalah plumbing pinjaman, bukan strategi.
+- **Dua warning lint** di `src/MorphoArbExecutor.sol`: `require-revert-in-loop` dan
+  `arbitrary-send-eth`. Keduanya disengaja (loop whitelisted-call terbatas `MAX_CALLS`,
+  dan ETH hanya keluar lewat `rescueETH` ber-role), tapi belum didokumentasikan inline.

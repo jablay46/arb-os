@@ -3,12 +3,10 @@ pragma solidity ^0.8.30;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
 import {IMorphoFlashLoanCallback} from "../../src/interfaces/IMorpho.sol";
-import {
-    IBalancerV2FlashLoanRecipient,
-    IBalancerV3UnlockCallback
-} from "../../src/interfaces/IBalancer.sol";
+import {IBalancerV2FlashLoanRecipient} from "../../src/interfaces/IBalancer.sol";
 
 /// @notice Morpho Blue stand-in.
 /// @dev Reproduces the two behaviours the executor depends on: the loan is pushed to the
@@ -59,11 +57,10 @@ contract MockBalancerV2Vault {
 /// @dev Reproduces the transient-accounting pattern: liquidity is pulled inside the unlock
 ///      window via `sendTo`, and the borrower must `settle` the debt. Settled credit is
 ///      compared against what was lent out, so a borrower that forgets to repay cannot
-///      silently pass -- and a fee (extra credit) is allowed rather than treated as an error.
+///      silently pass. There is deliberately NO fee getter, matching the real Vault.
 contract MockBalancerV3Vault {
     using SafeERC20 for IERC20;
 
-    uint256 public feePercentage;
     bool public unlocked;
     address internal _caller;
 
@@ -71,25 +68,23 @@ contract MockBalancerV3Vault {
     mapping(address => uint256) internal _sent;
     mapping(address => uint256) internal _settled;
 
-    function setFeePercentage(uint256 pct) external {
-        feePercentage = pct;
-    }
-
-    function getFlashLoanFeePercentage() external view returns (uint256) {
-        return feePercentage;
-    }
-
     /// @dev Seed Vault liquidity.
     function seed(address token, uint256 amount) external {
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
     }
 
+    /// @dev Mirrors the real Vault exactly: `unlock` performs a raw `functionCall` of `data`
+    ///      on `msg.sender`. The data therefore has to be a fully-formed call to the
+    ///      borrower's callback -- it is NOT a bag of arguments the Vault decodes for you.
+    ///      An earlier version of this mock called the callback directly, which hid a real
+    ///      encoding bug: the executor was passing bare request bytes and the live Vault
+    ///      dispatched them as an empty call.
     function unlock(bytes calldata data) external returns (bytes memory) {
         unlocked = true;
         _caller = msg.sender;
         _reset();
 
-        bytes memory result = IBalancerV3UnlockCallback(msg.sender).unlockCallback(data);
+        bytes memory result = Address.functionCall(msg.sender, data);
 
         for (uint256 i = 0; i < _touched.length; ++i) {
             require(_settled[_touched[i]] >= _sent[_touched[i]], "VAULT_NOT_SETTLED");
@@ -107,11 +102,20 @@ contract MockBalancerV3Vault {
         IERC20(token).safeTransfer(to, amount);
     }
 
+    /// @dev Credit is the actual balance delta, not the hint, matching the real Vault. This
+    ///      means a borrower that calls `settle` without transferring the tokens first gets
+    ///      no credit and fails the end-of-unlock settlement check.
     function settle(address token, uint256 amountHint) external returns (uint256 credit) {
         require(unlocked && msg.sender == _caller, "VAULT_NOT_UNLOCKED");
         _track(token);
-        credit = amountHint;
-        _settled[token] += credit;
+        uint256 reservesBefore = _settled[token];
+        uint256 currentReserves = IERC20(token).balanceOf(address(this));
+        credit = currentReserves - reservesBefore;
+        _settled[token] = currentReserves;
+        // A hint above what was actually paid is discarded, as in the real Vault.
+        if (credit > amountHint) {
+            _settled[token] = reservesBefore + amountHint;
+        }
     }
 
     function _track(address token) internal {

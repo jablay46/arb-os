@@ -36,8 +36,13 @@ interface IBalancerV2FlashLoanRecipient {
 ///        2. does whatever it wants,
 ///        3. transfers the tokens back to the Vault and `settle(token, amountHint)`,
 ///      and every token delta must net to zero before the lock is released.
-///      Fee is read from `getFlashLoanFeePercentage()` (18-decimal fixed point) and is
-///      expected to be zero; the executor does not assume it.
+///
+///      **V3 charges no flash-loan fee, and has no fee getter.** Unlike V2 there is no
+///      `getFlashLoanFeePercentage` anywhere in the V3 monorepo; the only fee concept is the
+///      per-pool swap fee. A flash loan is simply an unbalanced-then-rebalanced transient
+///      delta, so the cost is exactly zero and the executor hardcodes `fee = 0` rather than
+///      calling a function that does not exist.
+///
 ///      `settle`/`sendTo` take an `IERC20` in the canonical interface; `address` is used
 ///      here because the ABI encoding is identical and it avoids an extra import.
 interface IBalancerV3Vault {
@@ -46,8 +51,6 @@ interface IBalancerV3Vault {
     function settle(address token, uint256 amountHint) external returns (uint256 credit);
 
     function sendTo(address token, address to, uint256 amount) external;
-
-    function getFlashLoanFeePercentage() external view returns (uint256);
 }
 
 /// @notice Callback invoked by the Balancer V3 Vault inside `unlock`.

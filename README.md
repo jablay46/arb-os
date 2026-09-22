@@ -38,6 +38,23 @@ The three differ in *when* the debt leaves the contract, and getting that wrong 
 single easiest way to report a loss as a profit. `_settleProfit` handles each case
 explicitly; the tests assert the exact profit for all three.
 
+### Where the fees actually live
+
+Neither Balancer Vault charges a flash-loan fee on Base, but for different reasons, and
+the difference matters when writing the interface:
+
+- **V2** does have a fee concept. It is a *protocol* fee read from the
+  `ProtocolFeesCollector` (`0xce88686553686DA562CE7Cea497CE749DA109f9F` on Base), reported
+  to the borrower through `feeAmounts` in the callback. It currently returns `0`.
+- **V3** has no flash-loan fee concept at all — there is no `getFlashLoanFeePercentage`
+  anywhere in the V3 monorepo. A flash loan is just a transient delta that is rebalanced
+  before the lock is released, so the cost is structurally zero.
+
+V3's `unlock` is also a raw `msg.sender.functionCall(data)`: the `data` you pass must be a
+complete call to your own callback, not a bag of arguments the Vault decodes for you.
+Passing bare request bytes is dispatched as an empty call and reverts with `FailedInnerCall`.
+
+
 ## Design decisions worth knowing
 
 **Profit is measured as a balance delta, not from the adapter's return value.** An
@@ -67,7 +84,8 @@ src/
   libraries/Types.sol          request/route/step structs
   libraries/Errors.sol         custom errors
 test/
-  MorphoArbExecutor.t.sol      25 tests across all three providers
+  MorphoArbExecutor.t.sol      25 unit tests across all three providers
+  fork/MorphoArbFork.t.sol     7 tests against live Base deployments
   mocks/                       ERC20, provider stand-ins, mock adapter
 script/
   Deploy.s.sol                 env-driven deployment
@@ -81,9 +99,23 @@ forge install foundry-rs/forge-std
 npm install
 
 forge build
-forge test
-forge test --gas-report
+forge test                        # unit tests, no network needed
 ```
+
+### Fork tests
+
+The fork suite exercises all three providers against live Base bytecode. It is the only
+check that the repayment mechanisms are wired to reality rather than to what the mocks
+believe reality is — it is what caught the V3 callback-encoding bug.
+
+```bash
+forge test                        # all 32: fork tests use Base's public RPC by default
+forge test --match-path 'test/fork/*' -vv
+```
+
+Set `BASE_RPC_URL` to use a private or archive node instead of the public endpoint. Loans
+are sized at 1 WETH because Balancer V3 holds only ~4 WETH on Base; a loan sized for
+Morpho's depth would revert on the Balancer side.
 
 Gas on the hot path (`execute` with a two-leg adapter route) is roughly 370k on Morpho
 and 445k on Balancer V3, dominated by the two swaps rather than by the loan plumbing.

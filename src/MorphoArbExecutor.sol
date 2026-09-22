@@ -69,8 +69,6 @@ contract MorphoArbExecutor is
 
     /// @notice Upper bound on the whitelisted-call route length (gas-griefing guard).
     uint256 public constant MAX_CALLS = 20;
-    /// @notice Fixed-point denominator for Balancer V3's flash-loan fee percentage.
-    uint256 internal constant BALANCER_V3_FEE_DENOMINATOR = 1e18;
 
     // ---------------------------------------------------------------------
     // Immutables
@@ -196,7 +194,11 @@ contract MorphoArbExecutor is
                 .flashLoan(IBalancerV2FlashLoanRecipient(address(this)), tokens, amounts, data);
         } else {
             // Balancer V3: the loan is pulled inside the unlock window, not before it.
-            IBalancerV3Vault(balancerV3Vault).unlock(data);
+            // `unlock` does `msg.sender.functionCall(data)`, so `data` must be a complete
+            // call to our own callback -- passing bare request bytes would be dispatched as
+            // an empty call and revert with `FailedInnerCall`.
+            IBalancerV3Vault(balancerV3Vault)
+                .unlock(abi.encodeCall(IBalancerV3UnlockCallback.unlockCallback, (data)));
         }
 
         // A provider that returns without ever invoking the callback would otherwise be a
@@ -263,7 +265,7 @@ contract MorphoArbExecutor is
         // Pull the loan out of the Vault; only possible inside this unlock window.
         IBalancerV3Vault(balancerV3Vault).sendTo(_loanToken, address(this), _loanAmount);
 
-        _loanFee = _readBalancerV3Fee(_loanAmount);
+        _loanFee = _balancerV3Fee(_loanAmount);
         _runRoute(request);
 
         // V3 tracks a transient delta per token: the balance has to reach the Vault and then
@@ -545,14 +547,14 @@ contract MorphoArbExecutor is
     // Internals
     // ---------------------------------------------------------------------
 
-    /// @dev Balancer V3 reports the flash-loan fee as an 18-decimal fixed-point percentage.
-    ///      Reading it rather than hardcoding zero means a future protocol change makes the
-    ///      route revert on `InsufficientProfit` instead of silently underpaying the Vault.
-    function _readBalancerV3Fee(uint256 amount) internal view returns (uint256 fee) {
-        uint256 percentage = IBalancerV3Vault(balancerV3Vault).getFlashLoanFeePercentage();
-        if (percentage != 0) {
-            fee = (amount * percentage) / BALANCER_V3_FEE_DENOMINATOR;
-        }
+    /// @dev Balancer V3 has no flash-loan fee and no fee getter. V2 charges a protocol fee
+    ///      that is currently 0 on Base and is reported through `feeAmounts` in the callback,
+    ///      so it is handled there. V3's fee is structurally zero: a flash loan is just a
+    ///      transient delta that is rebalanced before the lock is released, with no fee term
+    ///      anywhere in the Vault. Hardcoding zero here is therefore not an assumption about
+    ///      configuration -- there is no configuration to read.
+    function _balancerV3Fee(uint256) internal pure returns (uint256) {
+        return 0;
     }
 
     /// @dev Compound-style markets (Moonwell) return an error code instead of reverting.

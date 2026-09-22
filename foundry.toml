@@ -13,6 +13,9 @@ fs_permissions = []
 [fuzz]
 runs = 256
 
+[rpc_endpoints]
+base = "${BASE_RPC_URL}"
+
 [fmt]
 line_length = 100
 tab_width = 4
