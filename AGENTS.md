@@ -105,11 +105,21 @@ whichever check catches it.
 
 ```bash
 BASE_RPC_URL=https://... npm run scan:once
-BASE_RPC_URL=https://... npm run test:scanner
+npm run test:scanner                            # unit tests, no network
+BASE_RPC_URL=https://... npm run test:scanner:live   # fork + live tests
 ```
 
 Key facts that cost debugging time:
 
+- **The anvil fork must be mined explicitly.** The scanner's fork test relied on
+  anvil's auto-mining and a swap would sit unmined while the approve before it
+  landed, so the test failed with "tx ... was not mined" -- which reads like a
+  viem or anvil bug. Call `anvil_mine` after sending and poll for the receipt.
+- **Never hard-code a fork port.** A fixed port lets the test talk to whatever
+  else is listening on it: anvil fails to start with "Address already in use",
+  the test's RPC calls go to the *other* anvil, and the failure looks like a
+  transaction that was not mined. Bind an ephemeral port instead, and assert the
+  fork's `chainId` before using it.
 - **Two phases, one block.** Leg 2's input is leg 1's output, so a single pass
   would have to guess the intermediate amount. Both phases must be pinned to the
   same block; legs priced across blocks describe a cycle that never existed.

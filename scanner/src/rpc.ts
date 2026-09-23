@@ -145,4 +145,23 @@ export class RpcClient {
     if (!body.result) throw new RpcTransportError(body.error?.message ?? "no chain id");
     return Number(BigInt(body.result));
   }
+
+  /**
+   * Current L2 gas price in wei.
+   *
+   * Used for cost accounting, so a zero or malformed answer is thrown rather
+   * than returned: a gas price of zero would make every candidate look
+   * profitable.
+   */
+  async gasPrice(opts: { timeoutMs?: number } = {}): Promise<bigint> {
+    const res = await fetch(this.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: this.id++, method: "eth_gasPrice", params: [] }),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? this.defaultTimeoutMs),
+    });
+    const body = (await res.json()) as { result?: string; error?: { message: string } };
+    if (!body.result) throw new RpcTransportError(body.error?.message ?? "no gas price");
+    return BigInt(body.result);
+  }
 }

@@ -19,7 +19,7 @@ The three predecessor repos each got one piece right and had one piece wrong:
 | `morpho-flash-arb` | Solidity | On-chain executor, role separation intent | Granted all four roles at construction; relied on a setup script to revoke `OPERATOR_ROLE` |
 
 This repo keeps the on-chain executor from `morpho-flash-arb`, the route model from the
-Rust version, and the adapter ambition from the TypeScript version ﻗ with the accounting
+Rust version, and the adapter ambition from the TypeScript version -- with the accounting
 and role problems fixed rather than documented.
 
 See `ANALISIS-DAN-RENCANA-MERGE.md` for the full comparison and the merge rationale.
@@ -32,7 +32,7 @@ All three are free on Base, which is the entire reason the strategy is viable at
 |---|---|---|
 | Morpho Blue | `0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb` | `transferFrom` after callback returns |
 | Balancer V2 Vault | `0xBA12222222228d8Ba445958a75a0704d566BF2C8` | balance check inside `receiveFlashLoan` |
-| Balancer V3 Vault | `0xbA1333333333a1BA1108E8412f11850A5C319bA9` | `unlock` ﻗ `settle` transient accounting |
+| Balancer V3 Vault | `0xbA1333333333a1BA1108E8412f11850A5C319bA9` | `unlock` -> `settle` transient accounting |
 
 The three differ in *when* the debt leaves the contract, and getting that wrong is the
 single easiest way to report a loss as a profit. `_settleProfit` handles each case
@@ -46,7 +46,7 @@ the difference matters when writing the interface:
 - **V2** does have a fee concept. It is a *protocol* fee read from the
   `ProtocolFeesCollector` (`0xce88686553686DA562CE7Cea497CE749DA109f9F` on Base), reported
   to the borrower through `feeAmounts` in the callback. It currently returns `0`.
-- **V3** has no flash-loan fee concept at all ﻗ there is no `getFlashLoanFeePercentage`
+- **V3** has no flash-loan fee concept at all -- there is no `getFlashLoanFeePercentage`
   anywhere in the V3 monorepo. A flash loan is just a transient delta that is rebalanced
   before the lock is released, so the cost is structurally zero.
 
@@ -69,7 +69,7 @@ unnoticed.
 
 **`OPERATOR_ROLE` is not granted at construction.** The admin is a cold key; the operator
 is a hot key. The predecessor granted both and depended on a follow-up script to revoke
-the operator role ﻗ a missed step meant the cold wallet could move funds forever.
+the operator role -- a missed step meant the cold wallet could move funds forever.
 
 **The whitelisted-call route is the only escape hatch.** It exists for liquidations, where
 the sequence cannot be expressed as a token cycle. `transfer`/`approve`-style selectors
@@ -123,8 +123,8 @@ selector (`0x414bf389`); sending the wrong encoding reverts rather than misprici
 is still worth knowing which one you are talking to.
 
 Aerodrome encodes a pool as `(from, to, stable, factory)`, not as a fee tier, because a pair
-can exist **twice** ﻗ once as a volatile (constant-product) pool and once as a stable
-(xﺡﺏ+yﺡﺏ=k) pool. `stable` is therefore part of the pool identity, not a routing hint. This is
+can exist **twice** -- once as a volatile (constant-product) pool and once as a stable
+(x*y + y*x = k) pool. `stable` is therefore part of the pool identity, not a routing hint. This is
 not academic on Base: WETH/USDC has both, and the stable one holds ~2 WETH against ~1,657 in
 the volatile pool, so routing to the wrong one is an expensive mistake. Pass
 `factory = address(0)` to use the router's `defaultFactory()`.
@@ -139,13 +139,13 @@ discriminators from the Rust bot so off-chain encoders keep working.
 ### Does it actually arbitrage?
 
 Yes, and it is tested against live Base liquidity, not mocks. Two tests manufacture a
-dislocation the way one appears in production ﻗ by pushing a large trade through a thin pool
-ﻗ then borrow 1 WETH and settle a real profit:
+dislocation the way one appears in production -- by pushing a large trade through a thin pool
+-- then borrow 1 WETH and settle a real profit:
 
 | Route | Dislocation | Profit on a 1 WETH loan |
 |---|---|---|
-| Uniswap V3 0.05% ﻗ 0.01% | 30 WETH through the 0.01% pool (~47 WETH deep) | ~0.079 WETH |
-| Uniswap V3 ﻗ Aerodrome volatile | 250 WETH through Aerodrome (~1,657 WETH deep) | ~0.314 WETH |
+| Uniswap V3 0.05% -> 0.01% | 30 WETH through the 0.01% pool (~47 WETH deep) | ~0.079 WETH |
+| Uniswap V3 -> Aerodrome volatile | 250 WETH through Aerodrome (~1,657 WETH deep) | ~0.314 WETH |
 
 The same suites prove the opposite: a round trip with no dislocation loses ~0.2% and the
 executor reverts with `InsufficientProfit` rather than reporting a zero-profit success.
@@ -158,7 +158,7 @@ Two RPC requirements that are easy to conflate: the scanner needs batch
 support, while the fork tests pin a historical block and therefore need
 archive access. A free-tier endpoint can satisfy the first and refuse the
 second with `403 Archive, Debug and Trace requests are not available`, which
-Foundry reports as `could not instantiate forked environment` — a message that
+Foundry reports as `could not instantiate forked environment` -- a message that
 reads like a broken URL rather than a plan limit. Use an archive-capable
 endpoint for `forge test --match-path "test/fork/*"`.
 
@@ -175,7 +175,7 @@ forge test                        # unit tests, no network needed
 
 The fork suite exercises all three providers against live Base bytecode. It is the only
 check that the repayment mechanisms are wired to reality rather than to what the mocks
-believe reality is ﻗ it is what caught the V3 callback-encoding bug.
+believe reality is -- it is what caught the V3 callback-encoding bug.
 
 ```bash
 forge test                        # all 42: fork tests use Base's public RPC by default
@@ -187,7 +187,7 @@ Set `BASE_RPC_URL` to use a private or archive node instead of the public endpoi
 Fork tests are pinned to a block (`BASE_FORK_BLOCK` overrides it) for two reasons. A moving
 fork head makes pool depth depend on when the suite ran, so a dislocation sized for one block
 can be far too small for the next. It also collapses state fetching to a single block, which
-matters because the public Base endpoint rate-limits hard enough to fail `setUp` outright ﻗ
+matters because the public Base endpoint rate-limits hard enough to fail `setUp` outright --
 that is what the pin fixed.
 
 Loans are sized at 1 WETH because Balancer V3 holds only ~4 WETH on Base; a loan sized for
@@ -211,7 +211,8 @@ transaction. Execution stays a separate, deliberate step.
 ```bash
 BASE_RPC_URL=https://... npm run scan:once      # one scan
 BASE_RPC_URL=https://... npm run scan           # loop every 2s
-BASE_RPC_URL=https://... npm run test:scanner   # 15 unit tests, no network
+npm run test:scanner                            # 33 unit tests, no network
+BASE_RPC_URL=https://... npm run test:scanner:live   # 8 tests against Base
 ```
 
 The search is a two-venue cycle over a shared loan token:
@@ -231,21 +232,57 @@ Loan fees are absent from the profit math on purpose: Morpho Blue and Balancer
 V2/V3 charge nothing on Base, so a cycle's gross profit is just
 `leg2Out - loanAmount`.
 
+### Ranking on net, not gross
+
+Gross profit is not what a cycle earns. A candidate that clears `minProfit` on
+gross terms can still lose money once gas is paid, so the scanner subtracts
+cost before it reports anything.
+
+On Base that cost has two terms, and omitting the second understates it exactly
+when fees are high. The L2 execution fee is `gas_used * gas_price`. On top of
+that, every transaction pays an **L1 data fee** for publishing its calldata to
+Ethereum, read from the OP-Stack GasPriceOracle via `getL1FeeUpperBound` and
+priced for the conservative worst-case unsigned `execute` transaction. If the
+oracle cannot be read the block is skipped rather than the fee priced at zero,
+because every broadcast pays it and a zero would let unprofitable trades
+through.
+
+Two behaviours are ported from the Rust bot:
+
+- `pickBestNet` compares net (gross - gas) against `minProfit`.
+- `canStillWin` stops simulating once a later candidate's gross falls to or
+  below the incumbent's net. Net can never exceed gross, so such a candidate
+  cannot win and the remaining simulations are wasted RPC calls. On a real
+  dislocation, 15 gross candidates reduced to 1 gas-priced.
+
+The pure comparisons live in `scanner/src/gas.ts` and are unit-tested offline;
+the RPC reads are tested separately against Base. A ranking bug and an RPC bug
+otherwise hide behind each other, and both produce the same symptom: a
+plausible net number that is wrong.
+
+Dry run has no transaction to simulate, so gas is a fixed 400k-unit ceiling
+rather than zero. Pricing it at zero would make the `minProfit` filter run
+against gross and report trades that live mode always rejects.
+
 ### What it found on a real dislocation
 
 Verified on a local fork of Base: dumping 300 WETH into the 0.01% WETH/USDC
 pool (which holds ~47 WETH) moves it hard enough to produce a large spread.
-The scanner then reports, for a 10 WETH loan through 0.3% -> 0.01%:
+The scanner then reports, for a 10 WETH loan:
 
 ```
-uniswap-v3-0.3% -> uniswap-v3-0.01%  loan=10.000000  out=212.183657  gross=202.183657 WETH
+uniswap-v3-0.05% -> uniswap-v3-0.01%
+loan=10.000000  gross=200.231770  gas=0.000402  net=200.231368 WETH
 ```
 
-An independent `cast` call against the same pool reproduces `+202.183658 WETH`
-exactly. The size of that profit is an artifact of the deliberately violent
-dislocation, not a claim about live markets: the honest baseline is the same
-scan before the dump, which reports a spread of about `-0.0005 WETH` ﻗ a
-round-trip cost of ~0.14%, consistent with the 0.3% + 0.01% fees.
+An independent `cast` call against the same pool reproduces the gross exactly.
+The size of that profit is an artifact of the deliberately violent dislocation,
+not a claim about live markets: the honest baseline is the same scan before the
+dump, which reports a spread of about `-0.0005 WETH` -- a round-trip cost of
+~0.14%, consistent with the pool fees.
+
+Those numbers come from `scanner/test/net.e2e.test.ts`, which runs this exact
+scenario, so they cannot drift from the code without the test failing.
 
 ### Trusting the local math
 
@@ -257,11 +294,11 @@ assumption yields confident, wrong quotes.
 `scanner/test/aerodrome.integration.test.ts` closes that gap by comparing the
 local result against the venue's own `getAmountsOut`. They agree exactly, and a
 second test asserts the volatile and stable pools of WETH/USDC carry different
-fees ﻗ which is why the fee is read per pool from the factory rather than
+fees -- which is why the fee is read per pool from the factory rather than
 assumed from the factory default.
 
 Aerodrome **stable** pools are refused rather than approximated: their curve
-(xﺡﺏy + yﺡﺏx = k) is not constant-product, so the local math would misprice them.
+(x*y + y*x = k) is not constant-product, so the local math would misprice them.
 The Rust bot refuses them too.
 
 ### Not implemented yet
@@ -272,10 +309,6 @@ These are deliberate gaps, not oversights:
   signs. `--execute` does not exist.
 - **Slipstream and Uniswap V4 adapters.** `Types.KIND_*` already carries their
   discriminators so off-chain encoders keep working.
-- **No gas-aware net ranking.** Candidates are ranked by gross profit. The Rust
-  bot simulates gas per candidate and stops early once a later candidate cannot
-  beat the incumbent's net (`can_still_win`); that is not ported yet, so the
-  scanner can report a candidate that gas would erase.
 - **`treasury` is a plain admin-set address**, not a splitter or a contract with
   its own withdrawal logic.
 
