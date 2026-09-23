@@ -82,12 +82,14 @@ src/
   MorphoArbExecutor.sol        main executor
   adapters/
     UniswapV3Adapter.sol       live Uniswap V3 / Slipstream-style router adapter
-  interfaces/                  IMorpho, IBalancer (V2 + V3), IUniswapV3, IAdapter
+    AerodromeAdapter.sol       live Aerodrome router adapter (stable + volatile)
+  interfaces/                  IMorpho, IBalancer (V2 + V3), IUniswapV3, IAerodrome, IAdapter
   libraries/Types.sol          request/route/step structs
   libraries/Errors.sol         custom errors
 test/
   MorphoArbExecutor.t.sol      25 unit tests across all three providers
   fork/MorphoArbFork.t.sol     13 tests against live Base deployments
+  fork/CrossDexFork.t.sol      4 cross-DEX tests (Aerodrome <-> Uniswap V3)
   mocks/                       ERC20, provider stand-ins, mock adapter
 script/
   Deploy.s.sol                 env-driven deployment
@@ -105,26 +107,42 @@ so an adapter cannot overstate what it delivered.
 | Adapter | `poolData` | Live on Base |
 |---|---|---|
 | `UniswapV3Adapter` | `abi.encode(uint24 fee)` | `0x2626664c2603336E57B271c5C0b26F421741e481` (SwapRouter02) |
+| `AerodromeAdapter` | `abi.encode(bool stable, address factory)` | `0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43` (Router) |
 
 Base runs `SwapRouter02`, whose `ExactInputSingleParams` has **no `deadline`** field
 (selector `0x04e45aaf`). The older `SwapRouter` variant has a deadline and a different
 selector (`0x414bf389`); sending the wrong encoding reverts rather than mispricing, but it
 is still worth knowing which one you are talking to.
 
-Aerodrome, Slipstream and Uniswap V4 are not wired up yet. `Types.KIND_*` already carries
-their discriminators from the Rust bot so off-chain encoders keep working.
+Aerodrome encodes a pool as `(from, to, stable, factory)`, not as a fee tier, because a pair
+can exist **twice** — once as a volatile (constant-product) pool and once as a stable
+(x³+y³=k) pool. `stable` is therefore part of the pool identity, not a routing hint. This is
+not academic on Base: WETH/USDC has both, and the stable one holds ~2 WETH against ~1,657 in
+the volatile pool, so routing to the wrong one is an expensive mistake. Pass
+`factory = address(0)` to use the router's `defaultFactory()`.
+
+`deadline` is not part of the step encoding. A profitable route has to land in the block it
+was priced for, so a deadline adds no protection a block builder cannot already give itself;
+the adapter passes `block.timestamp` to satisfy the router's own check.
+
+Slipstream and Uniswap V4 are not wired up yet. `Types.KIND_*` already carries their
+discriminators from the Rust bot so off-chain encoders keep working.
 
 ### Does it actually arbitrage?
 
-Yes, and it is tested. `test_real_profitable_route_settles_through_live_pools` creates a
-real cross-tier dislocation on chain — it pushes 30 WETH through Base's thin 0.01% WETH/USDC
-pool (~47 WETH deep, against ~18,000 in the 0.3% pool), which is exactly how a dislocation
-appears in production — then borrows 1 WETH, buys the cheap tier, sells the expensive one,
-and settles. It clears ~0.077 WETH profit on a 1 WETH loan.
+Yes, and it is tested against live Base liquidity, not mocks. Two tests manufacture a
+dislocation the way one appears in production — by pushing a large trade through a thin pool
+— then borrow 1 WETH and settle a real profit:
 
-The same suite proves the opposite: a WETH→USDC→WETH round trip with no dislocation loses
-~0.2%, and the executor reverts with `InsufficientProfit` rather than reporting a
-zero-profit success.
+| Route | Dislocation | Profit on a 1 WETH loan |
+|---|---|---|
+| Uniswap V3 0.05% → 0.01% | 30 WETH through the 0.01% pool (~47 WETH deep) | ~0.079 WETH |
+| Uniswap V3 → Aerodrome volatile | 250 WETH through Aerodrome (~1,657 WETH deep) | ~0.314 WETH |
+
+The same suites prove the opposite: a round trip with no dislocation loses ~0.2% and the
+executor reverts with `InsufficientProfit` rather than reporting a zero-profit success.
+The cross-DEX case additionally proves the executor dispatches to two different adapters
+within one route.
 
 ## Build and test
 
@@ -144,12 +162,19 @@ check that the repayment mechanisms are wired to reality rather than to what the
 believe reality is — it is what caught the V3 callback-encoding bug.
 
 ```bash
-forge test                        # all 38: fork tests use Base's public RPC by default
+forge test                        # all 42: fork tests use Base's public RPC by default
 forge test --match-path 'test/fork/*' -vv
 ```
 
-Set `BASE_RPC_URL` to use a private or archive node instead of the public endpoint. Loans
-are sized at 1 WETH because Balancer V3 holds only ~4 WETH on Base; a loan sized for
+Set `BASE_RPC_URL` to use a private or archive node instead of the public endpoint.
+
+Fork tests are pinned to a block (`BASE_FORK_BLOCK` overrides it) for two reasons. A moving
+fork head makes pool depth depend on when the suite ran, so a dislocation sized for one block
+can be far too small for the next. It also collapses state fetching to a single block, which
+matters because the public Base endpoint rate-limits hard enough to fail `setUp` outright —
+that is what the pin fixed.
+
+Loans are sized at 1 WETH because Balancer V3 holds only ~4 WETH on Base; a loan sized for
 Morpho's depth would revert on the Balancer side.
 
 Gas on the hot path (`execute` with a two-leg adapter route) is roughly 370k on Morpho

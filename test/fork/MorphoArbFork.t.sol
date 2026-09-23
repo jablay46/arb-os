@@ -6,7 +6,10 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {MorphoArbExecutor} from "../../src/MorphoArbExecutor.sol";
+import {AerodromeAdapter} from "../../src/adapters/AerodromeAdapter.sol";
 import {UniswapV3Adapter} from "../../src/adapters/UniswapV3Adapter.sol";
+import {IAerodromeRouter} from "../../src/interfaces/IAerodrome.sol";
+import {IUniswapV3QuoterV2} from "../../src/interfaces/IUniswapV3.sol";
 import {ISwapRouter02} from "../../src/interfaces/IUniswapV3.sol";
 import {Types} from "../../src/libraries/Types.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
@@ -53,7 +56,11 @@ contract MorphoArbForkTest is Test {
         // Falls back to Base's official public endpoint so `forge test` works out of the
         // box; override with BASE_RPC_URL for a private/archive node.
         string memory rpc = vm.envOr("BASE_RPC_URL", string("https://mainnet.base.org"));
-        vm.createSelectFork(rpc);
+        // Pinned for determinism: a moving fork head makes a pool's depth depend on when the
+        // suite ran, so a dislocation sized for one block can be far too small for the next.
+        // It also collapses fork state fetches to a single block, which matters because the
+        // public Base endpoint rate-limits hard enough to fail setUp on a bad run.
+        vm.createSelectFork(rpc, vm.envOr("BASE_FORK_BLOCK", uint256(51668376)));
         forked = true;
 
         adapter = new ForkProfitAdapter();
@@ -254,7 +261,11 @@ contract MorphoArbRealAdapterForkTest is Test {
 
     function setUp() public {
         string memory rpc = vm.envOr("BASE_RPC_URL", string("https://mainnet.base.org"));
-        vm.createSelectFork(rpc);
+        // Pinned for determinism: a moving fork head makes a pool's depth depend on when the
+        // suite ran, so a dislocation sized for one block can be far too small for the next.
+        // It also collapses fork state fetches to a single block, which matters because the
+        // public Base endpoint rate-limits hard enough to fail setUp on a bad run.
+        vm.createSelectFork(rpc, vm.envOr("BASE_FORK_BLOCK", uint256(51668376)));
 
         adapter = new UniswapV3Adapter(UNISWAP_V3_ROUTER);
         executor = new MorphoArbExecutor(MORPHO, BALANCER_V2_VAULT, BALANCER_V3_VAULT, admin);
@@ -505,25 +516,6 @@ contract MorphoArbRealAdapterForkTest is Test {
             );
         return out;
     }
-}
-
-interface IUniswapV3QuoterV2 {
-    struct QuoteExactInputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        uint256 amountIn;
-        uint24 fee;
-        uint160 sqrtPriceLimitX96;
-    }
-
-    function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
-        external
-        returns (
-            uint256 amountOut,
-            uint160 sqrtPriceX96After,
-            uint32 initializedTicksCrossed,
-            uint256 gasEstimate
-        );
 }
 
 interface IBalancerV2FeeSource {

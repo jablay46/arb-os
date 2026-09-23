@@ -23,3 +23,25 @@ interface ISwapRouter02 {
         payable
         returns (uint256 amountOut);
 }
+
+/// @notice Minimal Uniswap V3 `QuoterV2` surface, used for live pricing.
+/// @dev Not `view`: QuoterV2 reverts internally to return its result, so a `staticcall`
+///      wrapper does not work and callers must treat it as a state-changing call.
+interface IUniswapV3QuoterV2 {
+    struct QuoteExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint24 fee;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
+        external
+        returns (
+            uint256 amountOut,
+            uint160 sqrtPriceX96After,
+            uint32 initializedTicksCrossed,
+            uint256 gasEstimate
+        );
+}

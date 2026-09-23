@@ -277,31 +277,50 @@ rasa aman yang salah.
 
 ### 5.3 Yang masih terbuka
 
-- **Adapter DEX baru ada satu.** `UniswapV3Adapter` sudah jalan lewat SwapRouter02 asli.
-  Aerodrome, Slipstream, dan Uniswap V4 belum. Diskriminator `Types.KIND_*` sudah ada
-  sejak awal supaya encoder off-chain tidak perlu berubah saat adapter ditambah.
+- **Adapter DEX sudah dua.** `UniswapV3Adapter` dan `AerodromeAdapter` sudah jalan lewat
+  router asli. Slipstream dan Uniswap V4 belum. Diskriminator `Types.KIND_*` sudah ada sejak
+  awal supaya encoder off-chain tidak perlu berubah saat adapter ditambah.
 - **Belum ada scanner off-chain.** Port discovery dari repo A/Rust (fase 2–3) belum dimulai.
   Saat ini route harus disuplai manual; tidak ada yang mencari peluang sendiri.
 - **Eksekusi belum pernah dijalankan di chain.** Semua pembuktian masih di fork test
   terhadap state Base asli, bukan transaksi nyata. Belum ada deploy.
+- **Fork test di-pin ke satu blok.** Ini membuat suite deterministik dan ramah RPC publik,
+  tapi berarti angka profit di bawah hanya berlaku untuk blok itu. Untuk memantau peluang
+  nyata, lepas pin (`BASE_FORK_BLOCK`) dan pakai RPC privat.
 - **Dua warning lint** di `src/MorphoArbExecutor.sol`: `require-revert-in-loop` dan
   `arbitrary-send-eth`. Keduanya disengaja (loop whitelisted-call terbatas `MAX_CALLS`,
   dan ETH hanya keluar lewat `rescueETH` ber-role), tapi belum didokumentasikan inline.
 
 ### 5.4 Arbitrase nyata sudah terbukti, bukan hanya plumbing
 
-`test_real_profitable_route_settles_through_live_pools` membuat dislokasi harga sungguhan
-di chain — mendorong 30 WETH lewat pool 0.01% WETH/USDC Base yang tipis (~47 WETH, versus
-~18.000 WETH di pool 0.3%), persis seperti cara dislokasi muncul di produksi. Lalu
-executor meminjam 1 WETH, membeli di tier murah, menjual di tier mahal, dan settle dengan
-profit ~0.077 WETH.
+Dua test membuat dislokasi harga sungguhan di chain — dengan mendorong trade besar lewat pool
+yang tipis, persis seperti cara dislokasi muncul di produksi — lalu meminjam 1 WETH dan
+settle profit nyata:
 
-Ini penting karena mengubah status proyek: sebelumnya executor hanya terbukti "memanggil
-adapter dengan benar". Sekarang jalur profit end-to-end terbukti menghasilkan uang dari
-likuiditas nyata. Kebalikannya juga diuji: round-trip tanpa dislokasi rugi ~0.2% dan
-executor revert `InsufficientProfit`, bukan melaporkan sukses profit nol.
+| Route | Dislokasi | Profit dari loan 1 WETH |
+|---|---|---|
+| Uniswap V3 0.05% → 0.01% | 30 WETH lewat pool 0.01% (~47 WETH) | ~0.079 WETH |
+| Uniswap V3 → Aerodrome volatile | 250 WETH lewat Aerodrome (~1.657 WETH) | ~0.314 WETH |
 
-### 5.5 Bug yang ditemukan fork test adapter
+Ini mengubah status proyek. Sebelumnya executor hanya terbukti "memanggil adapter dengan
+benar". Sekarang jalur profit end-to-end terbukti menghasilkan uang dari likuiditas nyata,
+dan kasus cross-DEX sekaligus membuktikan executor mengirim ke **dua adapter berbeda** dalam
+satu route. Kebalikannya juga diuji: round-trip tanpa dislokasi rugi ~0.2% dan executor
+revert `InsufficientProfit`, bukan melaporkan sukses profit nol.
+
+Pelajaran ukuran: percobaan pertama memakai 400 WETH lewat pool 0.3% dan hanya menggeser
+harga ~0.1%, karena pool itu menyimpan ~18.000 WETH. Ukuran trade tanpa konteks kedalaman
+pool tidak berarti apa-apa.
+
+### 5.5 Aerodrome: `stable` adalah identitas pool, bukan petunjuk routing
+
+Aerodrome meng-encode pool sebagai `(from, to, stable, factory)`, bukan sebagai fee tier,
+karena satu pair bisa ada **dua kali** — sebagai pool volatile (constant-product) dan stable
+(x³+y³=k). Di Base ini bukan soal teoretis: WETH/USDC punya keduanya, dan pool stable-nya
+hanya menyimpan ~2 WETH sementara yang volatile ~1.657 WETH. Salah pilih pool bukan sekadar
+revert, tapi bisa terisi di harga yang jauh berbeda.
+
+### 5.6 Bug yang ditemukan fork test adapter
 
 Pembayaran utang di jalur Balancer berjalan **sebelum** pengecekan floor profit. Akibatnya
 route yang tidak mampu bayar revert dengan error ERC20 kosong — dana tetap aman, tapi
@@ -312,3 +331,14 @@ telemetri, ini kegagalan yang senyap.
 melaporkan `InsufficientProfit` dengan angka `required`/`available` yang **identik** dengan
 yang dipakai `_settleProfit`, supaya pelanggaran floor memberi pesan yang sama tak peduli
 pengecekan mana yang menangkapnya.
+
+### 5.7 Flaky fork test: RPC publik, bukan logika
+
+Suite sempat flaky dengan gejala khas: beberapa test gagal di blok yang sama dengan gas
+sangat kecil (25.032, 19.753) — itu revert di `setUp`, bukan di logika test. Penyebabnya
+endpoint publik Base yang rate-limit (kita sudah melihat error 429 langsung).
+
+Pin blok menyelesaikan dua hal sekaligus: determinisme (kedalaman pool tidak lagi bergantung
+kapan suite dijalankan) dan jumlah panggilan RPC turun jadi satu blok. Sesudahnya: 42/42
+stabil di tiga run berturut-turut, dua run terakhir selesai 0,4 detik karena state fork
+ter-cache.
