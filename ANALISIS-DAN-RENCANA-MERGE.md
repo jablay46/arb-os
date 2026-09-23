@@ -277,13 +277,38 @@ rasa aman yang salah.
 
 ### 5.3 Yang masih terbuka
 
-- **Belum ada adapter DEX nyata.** `IAdapter` + `ForkProfitAdapter` membuktikan executor
-  memanggil adapter dengan benar, tapi Uniswap V3/Aerodrome/Slipstream/1inch belum ditulis.
-  Tanpa ini belum ada yang bisa dieksekusi di chain.
+- **Adapter DEX baru ada satu.** `UniswapV3Adapter` sudah jalan lewat SwapRouter02 asli.
+  Aerodrome, Slipstream, dan Uniswap V4 belum. Diskriminator `Types.KIND_*` sudah ada
+  sejak awal supaya encoder off-chain tidak perlu berubah saat adapter ditambah.
 - **Belum ada scanner off-chain.** Port discovery dari repo A/Rust (fase 2–3) belum dimulai.
-- **Fork test belum menguji route dua-leg dengan harga nyata.** Saat ini route-nya
-  sintetis (1:1 + tip) karena dislokasi harga tidak bisa diasumsikan ada di blok tertentu.
-  Yang diuji adalah plumbing pinjaman, bukan strategi.
+  Saat ini route harus disuplai manual; tidak ada yang mencari peluang sendiri.
+- **Eksekusi belum pernah dijalankan di chain.** Semua pembuktian masih di fork test
+  terhadap state Base asli, bukan transaksi nyata. Belum ada deploy.
 - **Dua warning lint** di `src/MorphoArbExecutor.sol`: `require-revert-in-loop` dan
   `arbitrary-send-eth`. Keduanya disengaja (loop whitelisted-call terbatas `MAX_CALLS`,
   dan ETH hanya keluar lewat `rescueETH` ber-role), tapi belum didokumentasikan inline.
+
+### 5.4 Arbitrase nyata sudah terbukti, bukan hanya plumbing
+
+`test_real_profitable_route_settles_through_live_pools` membuat dislokasi harga sungguhan
+di chain — mendorong 30 WETH lewat pool 0.01% WETH/USDC Base yang tipis (~47 WETH, versus
+~18.000 WETH di pool 0.3%), persis seperti cara dislokasi muncul di produksi. Lalu
+executor meminjam 1 WETH, membeli di tier murah, menjual di tier mahal, dan settle dengan
+profit ~0.077 WETH.
+
+Ini penting karena mengubah status proyek: sebelumnya executor hanya terbukti "memanggil
+adapter dengan benar". Sekarang jalur profit end-to-end terbukti menghasilkan uang dari
+likuiditas nyata. Kebalikannya juga diuji: round-trip tanpa dislokasi rugi ~0.2% dan
+executor revert `InsufficientProfit`, bukan melaporkan sukses profit nol.
+
+### 5.5 Bug yang ditemukan fork test adapter
+
+Pembayaran utang di jalur Balancer berjalan **sebelum** pengecekan floor profit. Akibatnya
+route yang tidak mampu bayar revert dengan error ERC20 kosong — dana tetap aman, tapi
+operator tidak melihat penyebabnya. Untuk bot otomatis yang hanya punya pesan error sebagai
+telemetri, ini kegagalan yang senyap.
+
+`_requireRepayable` sekarang dijalankan lebih dulu di kedua callback Balancer dan
+melaporkan `InsufficientProfit` dengan angka `required`/`available` yang **identik** dengan
+yang dipakai `_settleProfit`, supaya pelanggaran floor memberi pesan yang sama tak peduli
+pengecekan mana yang menangkapnya.
