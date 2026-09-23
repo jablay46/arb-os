@@ -17,7 +17,7 @@ npm ci
 
 forge test --no-match-path "test/fork/*"   # 25 unit tests, no network
 npx tsc --noEmit                           # scanner types; needs tsconfig.json
-npm run test:scanner                       # 36 offline scanner tests
+npm run test:scanner                       # 42 offline scanner tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly the four commands above. It never runs the fork or
@@ -155,7 +155,7 @@ tests encode which cases the original author considered load-bearing.
 
 ```bash
 BASE_RPC_URL=https://... npm run scan:once
-npm run test:scanner                            # 36 unit tests, no network
+npm run test:scanner                            # 42 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # fork + live tests
 ```
 
@@ -186,6 +186,18 @@ Key facts that cost debugging time:
   liquidity), so it maps to `null` and skips that size. A transport failure is
   different and must be retried and then thrown — a silently empty batch is
   indistinguishable from "no opportunities found".
+- **A provider error looks exactly like a revert, and is not one.** Base answers
+  a throttled batch with HTTP 200 and a *per-call* error,
+  `{"code":-32016,"message":"over rate limit"}`, in the same array position and
+  the same shape as an `execution reverted`. The first implementation mapped
+  every per-call error to `null`, so a throttled scan reported "no
+  opportunities" — the scan could not tell a quiet market from an endpoint
+  refusing to answer. Only code `3` (or a message containing "revert") is a
+  revert; anything else is raised as `RetryableRpcError` and retried. This is
+  why `test:scanner:live` against `https://mainnet.base.org` is flaky: the
+  public endpoint throttles a burst of `eth_call`s, and the retry budget is
+  small. Use a private RPC for a full live run; a flaky live test here is the
+  endpoint, not the scanner.
 - **The local Aerodrome math must be cross-checked against the router.**
   `scanner/test/aerodrome.integration.test.ts` does exactly that, and it is the
   test that would catch a wrong fee or curve assumption. Reading the fee from
@@ -203,7 +215,9 @@ Base RPCs used in this repo. A token in a URL is a secret: keep it in
 |---|---|---|---|---|---|
 | Chainstack (private) | 200 | OK | OK | +1 block | **no** (403) |
 | Alchemy (private) | 200 | OK | OK | +1 block | yes |
-| `mainnet.base.org` (public) | 200 | - | **fails** | - | - |
+| `mainnet.base.org` (public) | 200 | - | OK | +1 block | **throttles bursts** (-32016) |
+| `base-rpc.publicnode.com` (public) | 200 | - | OK | - | **no** (403, needs token) |
+| `1rpc.io/base` (public) | 200 | - | OK | - | - |
 
 Two different requirements, and mixing them up produces a confusing failure:
 
@@ -215,9 +229,15 @@ Two different requirements, and mixing them up produces a confusing failure:
   forked environment` - which reads like a broken URL rather than a plan limit.
   Use Alchemy for `forge test --match-path "test/fork/*"`.
 
-The public endpoint answers single calls but rejects batch requests, which is
-what broke the unpinned Foundry fork suite. Prefer a private endpoint for
-anything beyond one-off queries.
+`mainnet.base.org` answers a burst of batched `eth_call`s with HTTP 200 and a
+per-call `-32016 over rate limit`, so `test:scanner:live` against it is flaky by
+construction; the retry budget covers a brief swallow, not sustained throttling.
+`base-rpc.publicnode.com` serves that suite cleanly except the two tests that
+fork a historical block, and it refuses archive reads without a token. Neither
+public endpoint can run the full live suite; a private RPC can.
+
+The public `mainnet.base.org` endpoint used to reject batch requests outright,
+which broke the unpinned Foundry fork suite. It accepts them now.
 
 ## Mocks
 

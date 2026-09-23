@@ -25,6 +25,29 @@ export class CallReverted extends Error {}
 
 export class RpcTransportError extends Error {}
 
+/** A transport failure worth retrying: throttling, a 5xx, or a provider hiccup. */
+export class RetryableRpcError extends RpcTransportError {}
+
+/** JSON-RPC `execution reverted`, as both viem and the Base endpoint report it. */
+const REVERT_CODE = 3;
+
+/**
+ * Whether a per-call JSON-RPC error means "this call reverted" as opposed to a
+ * provider-level failure.
+ *
+ * The distinction is load-bearing. A reverted `eth_call` is normal -- a
+ * QuoterV2 call for more than the pool holds reverts, and the scan should skip
+ * that size. But a provider error returned in the same shape (Base answers a
+ * throttled batch with HTTP 200 and `{"code":-32016,"message":"over rate
+ * limit"}`) must NOT be mistaken for a revert, or a scan that read nothing
+ * reports "no opportunities" and looks exactly like a quiet market. Only an
+ * explicit revert is treated as one; everything else is raised.
+ */
+function isRevertError(err: { code: number; message?: string }): boolean {
+  if (err.code === REVERT_CODE) return true;
+  return /revert/i.test(err.message ?? "");
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class RpcClient {
@@ -87,7 +110,7 @@ export class RpcClient {
         });
 
         if (res.status === 429 || res.status >= 500) {
-          lastError = new RpcTransportError(`HTTP ${res.status}`);
+          lastError = new RetryableRpcError(`HTTP ${res.status}`);
           continue;
         }
         if (!res.ok) {
@@ -96,23 +119,34 @@ export class RpcClient {
 
         const body = (await res.json()) as
           | { id: number; result?: string; error?: { code: number; message: string } }[]
-          | { error?: { message: string } };
+          | { error?: { code?: number; message?: string } };
 
         if (!Array.isArray(body)) {
-          // Providers may answer a batch with a single error object.
-          throw new RpcTransportError(body.error?.message ?? "non-array batch response");
+          // Providers may answer a batch with a single error object. A
+          // throttle sometimes arrives this way, so retry it rather than
+          // letting it surface as a failed batch.
+          throw new RetryableRpcError(body.error?.message ?? "non-array batch response");
         }
 
         const byId = new Map(body.map((r) => [r.id, r]));
         return payload.map((p) => {
           const r = byId.get(p.id);
-          if (!r) throw new RpcTransportError(`missing response for id ${p.id}`);
-          if (r.error) return null; // reverted / unquotable call
+          if (!r) throw new RetryableRpcError(`missing response for id ${p.id}`);
+          if (r.error) {
+            // A real revert is the scan's normal "skip this size" signal.
+            // Anything else is a provider failure wearing the same shape
+            // (Base reports throttling as code -32016 with HTTP 200), and
+            // swallowing it as `null` would make a throttled scan look like a
+            // market with no opportunities.
+            if (isRevertError(r.error)) return null;
+            throw new RetryableRpcError(
+              `provider error ${r.error.code}: ${r.error.message}`,
+            );
+          }
           return r.result ?? null;
         });
       } catch (e) {
-        if (e instanceof RpcTransportError && !String(e.message).startsWith("HTTP 429") &&
-            !String(e.message).startsWith("HTTP 5")) {
+        if (e instanceof RpcTransportError && !(e instanceof RetryableRpcError)) {
           throw e; // a real protocol error, not worth retrying
         }
         lastError = e as Error;
