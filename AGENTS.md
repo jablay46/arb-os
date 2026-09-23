@@ -229,6 +229,12 @@ Two different requirements, and mixing them up produces a confusing failure:
   forked environment` - which reads like a broken URL rather than a plan limit.
   Use Alchemy for `forge test --match-path "test/fork/*"`.
 
+  "Historical" is relative: the default `BASE_FORK_BLOCK` (51668376) sits well
+  inside a pruned full node's window, so `mainnet.base.org` ran all 17 fork
+  tests against it without archive access. Only a block older than the node's
+  retention needs an archive endpoint, so raise `BASE_FORK_BLOCK` deliberately
+  if you raise it at all.
+
 `mainnet.base.org` answers a burst of batched `eth_call`s with HTTP 200 and a
 per-call `-32016 over rate limit`, so `test:scanner:live` against it is flaky by
 construction; the retry budget covers a brief swallow, not sustained throttling.

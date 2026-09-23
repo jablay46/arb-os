@@ -161,7 +161,9 @@ archive access. A free-tier endpoint can satisfy the first and refuse the
 second with `403 Archive, Debug and Trace requests are not available`, which
 Foundry reports as `could not instantiate forked environment` -- a message that
 reads like a broken URL rather than a plan limit. Use an archive-capable
-endpoint for `forge test --match-path "test/fork/*"`.
+endpoint for `forge test --match-path "test/fork/*"`; that requirement only
+bites for a block older than the node's retention, and the default fork block
+is recent enough that a public endpoint ran all 17 tests.
 
 A public endpoint that accepts batches can still throttle a burst of them,
 answering with HTTP 200 and a per-call `-32016 over rate limit`. The scanner
