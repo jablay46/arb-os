@@ -139,11 +139,21 @@ Aerodrome **stable** pools are refused, not approximated: their curve
 Base RPCs used in this repo. A token in a URL is a secret: keep it in
 `BASE_RPC_URL`, never in a committed file.
 
-| Endpoint | HTTP | WSS | Batch | `pending` |
-|---|---|---|---|---|
-| Chainstack (private) | 200 | OK | OK | +1 block |
-| Alchemy (private) | 200 | OK | OK | +1 block |
-| `mainnet.base.org` (public) | 200 | — | **fails** | — |
+| Endpoint | HTTP | WSS | Batch | `pending` | Archive |
+|---|---|---|---|---|---|
+| Chainstack (private) | 200 | OK | OK | +1 block | **no** (403) |
+| Alchemy (private) | 200 | OK | OK | +1 block | yes |
+| `mainnet.base.org` (public) | 200 | - | **fails** | - | - |
+
+Two different requirements, and mixing them up produces a confusing failure:
+
+- **The scanner** needs batch support and a pinned block, which all three
+  endpoints can serve. Chainstack is fine here.
+- **The fork tests** pin a historical block, which needs archive access.
+  Chainstack answers `403 Archive, Debug and Trace requests are not available
+  on your current plan`, and Foundry reports that as `could not instantiate
+  forked environment` - which reads like a broken URL rather than a plan limit.
+  Use Alchemy for `forge test --match-path "test/fork/*"`.
 
 The public endpoint answers single calls but rejects batch requests, which is
 what broke the unpinned Foundry fork suite. Prefer a private endpoint for

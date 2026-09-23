@@ -19,7 +19,7 @@ The three predecessor repos each got one piece right and had one piece wrong:
 | `morpho-flash-arb` | Solidity | On-chain executor, role separation intent | Granted all four roles at construction; relied on a setup script to revoke `OPERATOR_ROLE` |
 
 This repo keeps the on-chain executor from `morpho-flash-arb`, the route model from the
-Rust version, and the adapter ambition from the TypeScript version — with the accounting
+Rust version, and the adapter ambition from the TypeScript version ﻗ with the accounting
 and role problems fixed rather than documented.
 
 See `ANALISIS-DAN-RENCANA-MERGE.md` for the full comparison and the merge rationale.
@@ -32,7 +32,7 @@ All three are free on Base, which is the entire reason the strategy is viable at
 |---|---|---|
 | Morpho Blue | `0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb` | `transferFrom` after callback returns |
 | Balancer V2 Vault | `0xBA12222222228d8Ba445958a75a0704d566BF2C8` | balance check inside `receiveFlashLoan` |
-| Balancer V3 Vault | `0xbA1333333333a1BA1108E8412f11850A5C319bA9` | `unlock` → `settle` transient accounting |
+| Balancer V3 Vault | `0xbA1333333333a1BA1108E8412f11850A5C319bA9` | `unlock` ﻗ `settle` transient accounting |
 
 The three differ in *when* the debt leaves the contract, and getting that wrong is the
 single easiest way to report a loss as a profit. `_settleProfit` handles each case
@@ -46,7 +46,7 @@ the difference matters when writing the interface:
 - **V2** does have a fee concept. It is a *protocol* fee read from the
   `ProtocolFeesCollector` (`0xce88686553686DA562CE7Cea497CE749DA109f9F` on Base), reported
   to the borrower through `feeAmounts` in the callback. It currently returns `0`.
-- **V3** has no flash-loan fee concept at all — there is no `getFlashLoanFeePercentage`
+- **V3** has no flash-loan fee concept at all ﻗ there is no `getFlashLoanFeePercentage`
   anywhere in the V3 monorepo. A flash loan is just a transient delta that is rebalanced
   before the lock is released, so the cost is structurally zero.
 
@@ -69,7 +69,7 @@ unnoticed.
 
 **`OPERATOR_ROLE` is not granted at construction.** The admin is a cold key; the operator
 is a hot key. The predecessor granted both and depended on a follow-up script to revoke
-the operator role — a missed step meant the cold wallet could move funds forever.
+the operator role ﻗ a missed step meant the cold wallet could move funds forever.
 
 **The whitelisted-call route is the only escape hatch.** It exists for liquidations, where
 the sequence cannot be expressed as a token cycle. `transfer`/`approve`-style selectors
@@ -123,8 +123,8 @@ selector (`0x414bf389`); sending the wrong encoding reverts rather than misprici
 is still worth knowing which one you are talking to.
 
 Aerodrome encodes a pool as `(from, to, stable, factory)`, not as a fee tier, because a pair
-can exist **twice** — once as a volatile (constant-product) pool and once as a stable
-(x³+y³=k) pool. `stable` is therefore part of the pool identity, not a routing hint. This is
+can exist **twice** ﻗ once as a volatile (constant-product) pool and once as a stable
+(xﺡﺏ+yﺡﺏ=k) pool. `stable` is therefore part of the pool identity, not a routing hint. This is
 not academic on Base: WETH/USDC has both, and the stable one holds ~2 WETH against ~1,657 in
 the volatile pool, so routing to the wrong one is an expensive mistake. Pass
 `factory = address(0)` to use the router's `defaultFactory()`.
@@ -139,13 +139,13 @@ discriminators from the Rust bot so off-chain encoders keep working.
 ### Does it actually arbitrage?
 
 Yes, and it is tested against live Base liquidity, not mocks. Two tests manufacture a
-dislocation the way one appears in production — by pushing a large trade through a thin pool
-— then borrow 1 WETH and settle a real profit:
+dislocation the way one appears in production ﻗ by pushing a large trade through a thin pool
+ﻗ then borrow 1 WETH and settle a real profit:
 
 | Route | Dislocation | Profit on a 1 WETH loan |
 |---|---|---|
-| Uniswap V3 0.05% → 0.01% | 30 WETH through the 0.01% pool (~47 WETH deep) | ~0.079 WETH |
-| Uniswap V3 → Aerodrome volatile | 250 WETH through Aerodrome (~1,657 WETH deep) | ~0.314 WETH |
+| Uniswap V3 0.05% ﻗ 0.01% | 30 WETH through the 0.01% pool (~47 WETH deep) | ~0.079 WETH |
+| Uniswap V3 ﻗ Aerodrome volatile | 250 WETH through Aerodrome (~1,657 WETH deep) | ~0.314 WETH |
 
 The same suites prove the opposite: a round trip with no dislocation loses ~0.2% and the
 executor reverts with `InsufficientProfit` rather than reporting a zero-profit success.
@@ -153,6 +153,14 @@ The cross-DEX case additionally proves the executor dispatches to two different 
 within one route.
 
 ## Build and test
+
+Two RPC requirements that are easy to conflate: the scanner needs batch
+support, while the fork tests pin a historical block and therefore need
+archive access. A free-tier endpoint can satisfy the first and refuse the
+second with `403 Archive, Debug and Trace requests are not available`, which
+Foundry reports as `could not instantiate forked environment` — a message that
+reads like a broken URL rather than a plan limit. Use an archive-capable
+endpoint for `forge test --match-path "test/fork/*"`.
 
 ```bash
 # Dependencies are not vendored; install them first.
@@ -167,7 +175,7 @@ forge test                        # unit tests, no network needed
 
 The fork suite exercises all three providers against live Base bytecode. It is the only
 check that the repayment mechanisms are wired to reality rather than to what the mocks
-believe reality is — it is what caught the V3 callback-encoding bug.
+believe reality is ﻗ it is what caught the V3 callback-encoding bug.
 
 ```bash
 forge test                        # all 42: fork tests use Base's public RPC by default
@@ -179,7 +187,7 @@ Set `BASE_RPC_URL` to use a private or archive node instead of the public endpoi
 Fork tests are pinned to a block (`BASE_FORK_BLOCK` overrides it) for two reasons. A moving
 fork head makes pool depth depend on when the suite ran, so a dislocation sized for one block
 can be far too small for the next. It also collapses state fetching to a single block, which
-matters because the public Base endpoint rate-limits hard enough to fail `setUp` outright —
+matters because the public Base endpoint rate-limits hard enough to fail `setUp` outright ﻗ
 that is what the pin fixed.
 
 Loans are sized at 1 WETH because Balancer V3 holds only ~4 WETH on Base; a loan sized for
@@ -236,7 +244,7 @@ uniswap-v3-0.3% -> uniswap-v3-0.01%  loan=10.000000  out=212.183657  gross=202.1
 An independent `cast` call against the same pool reproduces `+202.183658 WETH`
 exactly. The size of that profit is an artifact of the deliberately violent
 dislocation, not a claim about live markets: the honest baseline is the same
-scan before the dump, which reports a spread of about `-0.0005 WETH` — a
+scan before the dump, which reports a spread of about `-0.0005 WETH` ﻗ a
 round-trip cost of ~0.14%, consistent with the 0.3% + 0.01% fees.
 
 ### Trusting the local math
@@ -249,11 +257,11 @@ assumption yields confident, wrong quotes.
 `scanner/test/aerodrome.integration.test.ts` closes that gap by comparing the
 local result against the venue's own `getAmountsOut`. They agree exactly, and a
 second test asserts the volatile and stable pools of WETH/USDC carry different
-fees — which is why the fee is read per pool from the factory rather than
+fees ﻗ which is why the fee is read per pool from the factory rather than
 assumed from the factory default.
 
 Aerodrome **stable** pools are refused rather than approximated: their curve
-(x³y + y³x = k) is not constant-product, so the local math would misprice them.
+(xﺡﺏy + yﺡﺏx = k) is not constant-product, so the local math would misprice them.
 The Rust bot refuses them too.
 
 ### Not implemented yet
