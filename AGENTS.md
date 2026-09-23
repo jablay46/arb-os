@@ -17,7 +17,7 @@ npm ci
 
 forge test --no-match-path "test/fork/*"   # 25 unit tests, no network
 npx tsc --noEmit                           # scanner types; needs tsconfig.json
-npm run test:scanner                       # 33 offline scanner tests
+npm run test:scanner                       # 36 offline scanner tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly the four commands above. It never runs the fork or
@@ -138,9 +138,24 @@ whichever check catches it.
 
 `scanner/` ports the Rust bot's discovery. It is read-only by construction.
 
+The port covers three functions, and the test fixtures are shared between them:
+`rankedOpportunities` and `bestCandidate` from `arbitrage.rs`, and `pickBestNet`
+plus `canStillWin` from the same file, which decide which candidate is worth
+simulating. `canStillWin`'s boundary is deliberately `>` and not `> net + 1`:
+with a zero effective gas price a candidate one wei above the incumbent's net
+wins outright, so pruning at `net + 1` would discard real opportunities. Both
+sides of that boundary have a test.
+
+Port coverage is a risk in itself: the Rust original tests a four-venue market
+routing through the dislocated pool, a dead venue not poisoning the others, and
+leg provenance reaching the opportunity. Those cases had no TypeScript
+equivalent until they were added, so the port looked complete while three
+behaviours were untested. When porting a function, port its tests too -- the
+tests encode which cases the original author considered load-bearing.
+
 ```bash
 BASE_RPC_URL=https://... npm run scan:once
-npm run test:scanner                            # unit tests, no network
+npm run test:scanner                            # 36 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # fork + live tests
 ```
 

@@ -215,7 +215,7 @@ transaction. Execution stays a separate, deliberate step.
 ```bash
 BASE_RPC_URL=https://... npm run scan:once      # one scan
 BASE_RPC_URL=https://... npm run scan           # loop every 2s
-npm run test:scanner                            # 33 unit tests, no network
+npm run test:scanner                            # 36 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # 8 tests against Base
 ```
 
