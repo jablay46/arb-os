@@ -99,6 +99,56 @@ empty ERC20 error and hides the cause. Keep the `required`/`available` figures i
 `_requireRepayable` identical to `_settleProfit`'s so a violation reports the same numbers
 whichever check catches it.
 
+## Scanner (TypeScript)
+
+`scanner/` ports the Rust bot's discovery. It is read-only by construction.
+
+```bash
+BASE_RPC_URL=https://... npm run scan:once
+BASE_RPC_URL=https://... npm run test:scanner
+```
+
+Key facts that cost debugging time:
+
+- **Two phases, one block.** Leg 2's input is leg 1's output, so a single pass
+  would have to guess the intermediate amount. Both phases must be pinned to the
+  same block; legs priced across blocks describe a cycle that never existed.
+- **Every venue must quote both directions.** The first implementation only
+  quoted `loanToQuote`, so leg 2 was priced on leg 1's curve. The symptom was a
+  "best spread" of -100% of the loan, which is impossible and is the tell that a
+  direction is reversed rather than that markets are bad.
+- **`eth_call` batching, not Multicall3.** QuoterV2 returns its answer by
+  *reverting*, which would revert an enclosing multicall. Use JSON-RPC batches.
+- **QuoterV2 returns four words; decode the first.** Reading the whole return
+  blob as one integer yields ~1e75, which flows into profit math looking like a
+  real quote.
+- **A reverted call in a batch is normal** (a size larger than the pool's
+  liquidity), so it maps to `null` and skips that size. A transport failure is
+  different and must be retried and then thrown — a silently empty batch is
+  indistinguishable from "no opportunities found".
+- **The local Aerodrome math must be cross-checked against the router.**
+  `scanner/test/aerodrome.integration.test.ts` does exactly that, and it is the
+  test that would catch a wrong fee or curve assumption. Reading the fee from
+  the factory is not sufficient on its own.
+
+Aerodrome **stable** pools are refused, not approximated: their curve
+(x³y + y³x = k) is not constant-product. The Rust bot refuses them too.
+
+## RPC endpoints
+
+Base RPCs used in this repo. A token in a URL is a secret: keep it in
+`BASE_RPC_URL`, never in a committed file.
+
+| Endpoint | HTTP | WSS | Batch | `pending` |
+|---|---|---|---|---|
+| Chainstack (private) | 200 | OK | OK | +1 block |
+| Alchemy (private) | 200 | OK | OK | +1 block |
+| `mainnet.base.org` (public) | 200 | — | **fails** | — |
+
+The public endpoint answers single calls but rejects batch requests, which is
+what broke the unpinned Foundry fork suite. Prefer a private endpoint for
+anything beyond one-off queries.
+
 ## Mocks
 
 `test/mocks/MockFlashLoanProviders.sol` mirrors the real Vaults' settlement mechanics

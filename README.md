@@ -91,6 +91,14 @@ test/
   fork/MorphoArbFork.t.sol     13 tests against live Base deployments
   fork/CrossDexFork.t.sol      4 cross-DEX tests (Aerodrome <-> Uniswap V3)
   mocks/                       ERC20, provider stand-ins, mock adapter
+scanner/
+  src/config.ts                venues, loan sizes, thresholds
+  src/rpc.ts                   batched JSON-RPC with retry
+  src/math.ts                  constant-product math
+  src/venues.ts                per-DEX quoting (Uniswap V3, Aerodrome)
+  src/discovery.ts             two-phase cycle search
+  src/main.ts                  scan loop
+  test/                        unit tests + live Aerodrome cross-check
 script/
   Deploy.s.sol                 env-driven deployment
 ```
@@ -186,19 +194,82 @@ See the header of `script/Deploy.s.sol` for the environment variables. Passing
 `address(0)` for a provider disables it, so a staged rollout that wires only Morpho first
 is supported.
 
-## Not implemented yet
+## Scanner
+
+`scanner/` is the port of the Rust bot's opportunity discovery. It is
+read-only: it prices cycles and prints them, and it cannot submit a
+transaction. Execution stays a separate, deliberate step.
+
+```bash
+BASE_RPC_URL=https://... npm run scan:once      # one scan
+BASE_RPC_URL=https://... npm run scan           # loop every 2s
+BASE_RPC_URL=https://... npm run test:scanner   # 15 unit tests, no network
+```
+
+The search is a two-venue cycle over a shared loan token:
+
+```
+leg 1: loanToken --[venue A]--> quoteToken
+leg 2: quoteToken --[venue B]--> loanToken
+```
+
+Two-phase quoting is a requirement, not an optimisation. Leg 2's input is leg
+1's *output*, which is unknown until leg 1 is priced; guessing the intermediate
+amount would price a trade nobody will execute. Both phases are pinned to the
+same block, because legs priced against different blocks describe a cycle that
+never existed.
+
+Loan fees are absent from the profit math on purpose: Morpho Blue and Balancer
+V2/V3 charge nothing on Base, so a cycle's gross profit is just
+`leg2Out - loanAmount`.
+
+### What it found on a real dislocation
+
+Verified on a local fork of Base: dumping 300 WETH into the 0.01% WETH/USDC
+pool (which holds ~47 WETH) moves it hard enough to produce a large spread.
+The scanner then reports, for a 10 WETH loan through 0.3% -> 0.01%:
+
+```
+uniswap-v3-0.3% -> uniswap-v3-0.01%  loan=10.000000  out=212.183657  gross=202.183657 WETH
+```
+
+An independent `cast` call against the same pool reproduces `+202.183658 WETH`
+exactly. The size of that profit is an artifact of the deliberately violent
+dislocation, not a claim about live markets: the honest baseline is the same
+scan before the dump, which reports a spread of about `-0.0005 WETH` — a
+round-trip cost of ~0.14%, consistent with the 0.3% + 0.01% fees.
+
+### Trusting the local math
+
+Only Aerodrome-volatile legs are priced locally; Uniswap V3 goes through
+QuoterV2. That local path is the one place the scanner computes a price
+instead of asking the chain, so it is the one place a wrong fee or curve
+assumption yields confident, wrong quotes.
+
+`scanner/test/aerodrome.integration.test.ts` closes that gap by comparing the
+local result against the venue's own `getAmountsOut`. They agree exactly, and a
+second test asserts the volatile and stable pools of WETH/USDC carry different
+fees — which is why the fee is read per pool from the factory rather than
+assumed from the factory default.
+
+Aerodrome **stable** pools are refused rather than approximated: their curve
+(x³y + y³x = k) is not constant-product, so the local math would misprice them.
+The Rust bot refuses them too.
+
+### Not implemented yet
 
 These are deliberate gaps, not oversights:
 
-- **No adapters.** `IAdapter` is defined and the mock proves the executor calls it
-  correctly, but Uniswap V3, Aerodrome, PancakeSwap V3, and 1inch adapters are not
-  written. Nothing can be executed on a live chain until at least one exists.
-- **No off-chain scanner.** The Rust repo's scanner is not ported; routes must be supplied
-  by the operator. The executor is the settlement layer, not the strategy layer.
-- **No fork tests.** The mocks encode the provider semantics that matter for repayment
-  ordering, but a Base fork test against the real vaults is the next real confidence step.
-- **`treasury` is a plain admin-set address**, not a splitter or a contract with its own
-  withdrawal logic.
+- **No transaction submission from the scanner.** It finds and prices; nothing
+  signs. `--execute` does not exist.
+- **Slipstream and Uniswap V4 adapters.** `Types.KIND_*` already carries their
+  discriminators so off-chain encoders keep working.
+- **No gas-aware net ranking.** Candidates are ranked by gross profit. The Rust
+  bot simulates gas per candidate and stops early once a later candidate cannot
+  beat the incumbent's net (`can_still_win`); that is not ported yet, so the
+  scanner can report a candidate that gas would erase.
+- **`treasury` is a plain admin-set address**, not a splitter or a contract with
+  its own withdrawal logic.
 
 ## Warning
 

@@ -1,18 +1,27 @@
 {
-  "name": "project",
+  "name": "arb-os",
   "version": "1.0.0",
-  "description": "",
+  "description": "Flash-loan arbitrage executor and opportunity scanner for Base",
   "main": "index.js",
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "forge test",
+    "scan": "tsx scanner/src/main.ts",
+    "scan:once": "tsx scanner/src/main.ts --once",
+    "test:scanner": "tsx --test scanner/test/scanner.test.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "viem": "^2.56.8"
   }
 }
