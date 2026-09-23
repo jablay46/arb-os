@@ -212,6 +212,18 @@ Prinsip integrasi penting:
 | 5 | ML dibangun ulang + gate opsional | walk-forward valid, default off |
 | 6 | Dry-run mainnet panjang, lalu live modal kecil | shadow-run tanpa revert tak terduga |
 
+Status per commit terakhir: **fase 1 selesai** (executor + adapters + fork suite), dan
+**fase 2 discovery selesai tetapi dalam TypeScript, bukan Rust** (`scanner/`, read-only,
+ranking net termasuk L1 data fee). Deviasi ini disengaja: port TS lebih cepat tervalidasi
+terhadap Base live, dan pemisahan read-only/eksekusi lebih mudah ditegakkan. Konsekuensinya
+`scanner/` tidak mendapat manfaat kecepatan Rust; kalau throughput jadi kendala, port ulang
+ke Rust tetap opsi, tetapi jangan jalankan dua implementasi discovery sekaligus — angka net
+keduanya akan berbeda dan sulit dipercaya.
+
+Fase 3–6 belum dimulai. Urutan yang disarankan berikutnya ada di §5.3 dan mengikuti prinsip:
+tutup dulu risiko yang bisa menghilangkan dana (property test + kontrol akses + validasi
+alamat), baru tambah permukaan serangan (adapter baru, likuidasi, ML).
+
 ### 3.5 Uji & jaminan sebelum uang nyata
 
 - Fork test pada blok nyata untuk **setiap** keluarga router (V2/Aero/V3/Slipstream/V4).
@@ -282,14 +294,61 @@ rasa aman yang salah.
   awal supaya encoder off-chain tidak perlu berubah saat adapter ditambah.
 - **Belum ada scanner off-chain.** Port discovery dari repo A/Rust (fase 2–3) belum dimulai.
   Saat ini route harus disuplai manual; tidak ada yang mencari peluang sendiri.
+
+  **Status: selesai.** Port discovery sudah ada di `scanner/` (TypeScript, read-only),
+  mencakup ranking net berbasis gas termasuk L1 data fee, dan sudah divalidasi terhadap Base
+  live (8 test) serta dislokasi fork (33 test offline). Eksekusi tetap langkah terpisah.
 - **Eksekusi belum pernah dijalankan di chain.** Semua pembuktian masih di fork test
   terhadap state Base asli, bukan transaksi nyata. Belum ada deploy.
 - **Fork test di-pin ke satu blok.** Ini membuat suite deterministik dan ramah RPC publik,
   tapi berarti angka profit di bawah hanya berlaku untuk blok itu. Untuk memantau peluang
   nyata, lepas pin (`BASE_FORK_BLOCK`) dan pakai RPC privat.
-- **Dua warning lint** di `src/MorphoArbExecutor.sol`: `require-revert-in-loop` dan
-  `arbitrary-send-eth`. Keduanya disengaja (loop whitelisted-call terbatas `MAX_CALLS`,
-  dan ETH hanya keluar lewat `rescueETH` ber-role), tapi belum didokumentasikan inline.
+- **Warning lint lebih banyak dari yang tercatat sebelumnya.** `forge lint` melaporkan **27
+  warning** dalam 7 kategori pada `src/MorphoArbExecutor.sol`:
+  `require-revert-in-loop` (11), `calls-loop` (5), `missing-zero-check` (3),
+  `unused-return` (3), `arbitrary-send-eth` (2), `reentrancy-events` (2),
+  `non-reentrant-not-first` (1). Sebagian besar disengaja dan terbatas: loop whitelisted-call
+  dibatasi `MAX_CALLS`, ETH hanya keluar lewat `rescueETH` ber-role, dan `unused-return`
+  (`unlock`/`settle`/`forceApprove`) memang aman diabaikan. Tapi tiga kategori belum
+  didokumentasikan inline dan satu layak ditinjau: `non-reentrant-not-first` di `execute`
+  (urutan `onlyRole` / `whenNotPaused` / `nonReentrant`) serta `reentrancy-events` di jalur
+  rescue. Angka ini berubah antar versi Foundry, jadi hitung ulang sebelum mengutipnya.
+
+### 5.3b Langkah selanjutnya (urut prioritas)
+
+Urutannya sengaja: dua item pertama menutup risiko yang bisa menghilangkan dana, sisanya
+menambah kemampuan. Jangan lompat ke adapter baru atau ML sebelum dua ini selesai.
+
+1. **Property test `balAfter >= balBefore + minProfit` atau revert, untuk setiap route.**
+   Ini jaring pengaman yang menangkap kelas bug yang lolos dari fork test bernama: route baru
+   yang salah mengenkode parameter tetap bisa menghasilkan angka profit yang terlihat masuk
+   akal. `forge` + `foundry` invariant testing sudah tersedia, tidak ada dependensi baru.
+   Kriteria selesai: setiap route di `src/adapters/` punya invariant test, dan satu route
+   sengaja dirusak untuk membuktikan test-nya memang gagal.
+2. **Test kontrol akses.** Buktikan operator **tidak bisa**: withdraw, mengalihkan profit,
+   mengubah whitelist, atau pause. Repo C punya niat ini tapi tidak pernah diuji; ini kelas
+   bug yang paling mahal kalau salah dan paling murah untuk diuji.
+3. **Validasi ulang semua alamat Base sebelum deploy.** Alamat di README dan dokumen merge
+   dicatat dari repo pendahulu; protokol bisa redeploy. Cek `Morpho`, Vault V2, Vault V3,
+   router, dan factory lewat `cast` terhadap chain, lalu tulis hasilnya dengan tanggal.
+4. **CI.** Saat ini tidak ada `.github/workflows`. Suite yang hanya dijalankan manual akan
+   membusuk. Minimum: `forge test` (unit), `npm run test:scanner` (offline), dan
+   `tsc --noEmit`. Test yang butuh RPC privat (fork + live) tetap manual — jangan pasang
+   `BASE_RPC_URL` di CI, karena secret di CI adalah kebocoran yang menunggu terjadi.
+   `tsconfig.json` belum ada, jadi `tsx` hanya transpile tanpa type-check; menambahkannya
+   menutup celah itu.
+5. **Adapter Slipstream dan Uniswap V4.** Kerjakan setelah 1–4. Keduanya butuh fork test
+   sendiri terhadap bytecode asli, dan V4 memakai arsitektur singleton yang berbeda sehingga
+   encoding pool-nya bukan fee tier.
+6. **Unpin fork test untuk pemantauan peluang nyata.** Pin blok membuat suite deterministik,
+   tapi berarti angka profit hanya berlaku untuk satu blok. Untuk pemantauan, lepas
+   `BASE_FORK_BLOCK` dan pakai RPC arsip.
+7. **Deploy ke Base mainnet (dry-run dulu).** Terakhir, dan hanya setelah 1–3 selesai. Mulai
+   dengan modal kecil; scanner tetap read-only dan eksekusi tetap langkah manual.
+
+Dua item yang **bukan** langkah berikutnya: ML (fase 5) dan strategi likuidasi (fase 3).
+Keduanya menambah permukaan serangan tanpa menutup risiko dana yang sudah ada, jadi urutannya
+di belakang.
 
 ### 5.4 Arbitrase nyata sudah terbukti, bukan hanya plumbing
 

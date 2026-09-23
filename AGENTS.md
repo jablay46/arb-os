@@ -17,9 +17,12 @@ forge fmt
 ```
 
 Foundry is at `/home/openhands/.foundry/bin`; add it to `PATH` if `forge` is missing. It is
-**not** installed by default in a fresh environment — download the official release tarball
-from `github.com/foundry-rs/foundry/releases` and verify the `.sha256` before extracting.
-Do not pipe a remote install script into a shell.
+**not** installed by default in a fresh environment — the toolchain is ephemeral and vanishes
+between sessions while the checkout survives, so `forge test` failing with "command not found"
+means the environment was recycled, not that the repo is broken. Run
+`./script/bootstrap-foundry.sh`, which downloads the pinned release tarball and refuses to
+extract it unless the SHA-256 from the same release matches. Do not pipe a remote install
+script into a shell.
 
 ## Fork tests: read this first
 
