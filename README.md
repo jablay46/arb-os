@@ -164,11 +164,14 @@ endpoint for `forge test --match-path "test/fork/*"`.
 
 ```bash
 # Dependencies are not vendored; install them first.
-forge install foundry-rs/forge-std
+# Pin the forge-std tag. Without one, `forge install` takes the default branch,
+# so the build can break without this repo changing.
+forge install foundry-rs/forge-std@v1.16.2
 npm install
 
 forge build
-forge test                        # unit tests, no network needed
+forge test --no-match-path "test/fork/*"   # unit tests, no network needed
+forge test                                 # everything, needs an archive RPC
 ```
 
 ### Fork tests

@@ -11,10 +11,21 @@ predecessor repos (see `ANALISIS-DAN-RENCANA-MERGE.md` for the comparison and ro
 ## Build and test
 
 ```bash
-forge test          # 42 tests: 25 unit + 17 fork
-forge build
-forge fmt
+./script/bootstrap-foundry.sh    # if forge is missing; see below
+forge install foundry-rs/forge-std@v1.16.2 --no-git   # lib/ is gitignored
+npm ci
+
+forge test --no-match-path "test/fork/*"   # 25 unit tests, no network
+npx tsc --noEmit                           # scanner types; needs tsconfig.json
+npm run test:scanner                       # 33 offline scanner tests
 ```
+
+CI (`.github/workflows/ci.yml`) runs exactly the four commands above. It never runs the fork or
+live suites: those need `BASE_RPC_URL`, and a secret in CI is readable by a pull request from a
+fork. Run them locally.
+
+`tsc --noEmit` is only meaningful with `tsconfig.json` present — without it, `tsc` prints its
+help text and exits 0, so a type-check job would be green without checking anything.
 
 Foundry is at `/home/openhands/.foundry/bin`; add it to `PATH` if `forge` is missing. It is
 **not** installed by default in a fresh environment — the toolchain is ephemeral and vanishes
