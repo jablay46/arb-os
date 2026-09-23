@@ -44,6 +44,30 @@ let anvil: ChildProcess | null = null;
 let forkRpc = "";
 
 /**
+ * Recent anvil output, kept for the "not mined" error.
+ *
+ * anvil used to be spawned with `stdio: "ignore"`, so the message that was
+ * supposed to carry its output had nothing to carry -- and referenced an
+ * undefined helper besides. Capturing stderr is what makes that message
+ * diagnostic instead of decorative: a failed fork fetch or a rejected
+ * transaction shows up here, not in the test's own assertions.
+ */
+const anvilOutput: string[] = [];
+
+function anvilLog(): string {
+  return anvilOutput.join("").trim() || "(anvil produced no output)";
+}
+
+function captureAnvil(stream: NodeJS.ReadableStream | null): void {
+  stream?.on("data", (chunk: Buffer) => {
+    anvilOutput.push(chunk.toString());
+    // Only the tail matters, and a --silent anvil that hits a bad block can
+    // otherwise grow this without bound over a long run.
+    if (anvilOutput.length > 200) anvilOutput.shift();
+  });
+}
+
+/**
  * Pick a free port instead of hard-coding one.
  *
  * A fixed port makes this test silently talk to whatever else is listening on
@@ -78,16 +102,21 @@ async function waitForRpc(rpc: RpcClient, attempts = 60): Promise<void> {
       await new Promise((r) => setTimeout(r, 500));
     }
   }
-  throw new Error(`anvil did not become ready on ${forkRpc}`);
+  throw new Error(`anvil did not become ready on ${forkRpc}\n--- anvil output ---\n${anvilLog()}`);
 }
 
 before(async () => {
   if (!rpcUrl) return;
   const port = await freePort();
   forkRpc = `http://127.0.0.1:${port}`;
-  anvil = spawn("anvil", ["--fork-url", rpcUrl, "--port", String(port), "--silent"], {
-    stdio: "ignore",
+  // No --silent: it suppresses exactly the fetch and revert errors that the
+  // failure messages below exist to surface. The buffer is bounded, so noise
+  // costs nothing unless a test actually fails.
+  anvil = spawn("anvil", ["--fork-url", rpcUrl, "--port", String(port)], {
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  captureAnvil(anvil.stdout);
+  captureAnvil(anvil.stderr);
   await waitForRpc(new RpcClient(forkRpc));
 });
 

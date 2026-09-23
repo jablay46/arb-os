@@ -64,7 +64,14 @@ interface VenueQuotes {
   leg1Local: boolean[];
   /** leg2 outputs keyed by the quote-token amount in. */
   leg2: Map<string, bigint | null>;
-  leg2Local: boolean;
+  /**
+   * Whether each leg2 quote came from local reserve math.
+   *
+   * Keyed like `leg2`, not a single flag: leg 2 is priced for several
+   * intermediate amounts, and a V3 venue may fetch one on-chain while an
+   * Aerodrome venue computes the same amount locally.
+   */
+  leg2Local: Map<string, boolean>;
 }
 
 /**

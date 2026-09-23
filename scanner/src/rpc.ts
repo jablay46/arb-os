@@ -39,7 +39,10 @@ export class RpcClient {
   /** Single eth_call, returning raw hex or null when the call reverted. */
   async ethCall(call: RpcCall, opts: RpcOptions = {}): Promise<string | null> {
     const [out] = await this.ethCalls([call], opts);
-    return out;
+    // `ethCalls` returns one entry per call, so `out` is always present here;
+    // `noUncheckedIndexedAccess` cannot know that, and null keeps the declared
+    // return honest rather than widening it with undefined.
+    return out ?? null;
   }
 
   /**
