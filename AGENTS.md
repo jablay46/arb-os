@@ -27,6 +27,27 @@ fork. Run them locally.
 `tsc --noEmit` is only meaningful with `tsconfig.json` present — without it, `tsc` prints its
 help text and exits 0, so a type-check job would be green without checking anything.
 
+## The profit invariant
+
+`test/MorphoArbProperty.t.sol` asserts the rule that has to hold on every route, for all three
+providers: either the transaction settles having paid exactly its realised profit and left
+nothing behind, or it reverts for a known reason. The named tests in `MorphoArbExecutor.t.sol`
+only cover routes someone thought of; a new adapter with a misencoded parameter still produces a
+plausible number, and only this shape of test catches that.
+
+Two things about these tests are load-bearing and easy to undo by accident:
+
+- **The mock is allowed to lie.** `MockLyingAdapter` reports an output unrelated to what it
+  delivered, because that is the failure the balance-delta measurement exists to stop. If you
+  "simplify" the mocks to honest adapters, the sabotage tests become vacuous.
+- **Reverted state is not observable.** A test that tries to read a mock's counter after an
+  expected revert reads zero, because the revert undid it. To assert on which amount the
+  executor carried forward, arrange the route to succeed.
+
+Both traps were hit while writing this file. Verify any change to it by planting a mutation:
+replace the measured `amountOut` in `_executeAdapterRoute` with the adapter's return value and
+confirm `test_lying_adapter_*` fail. If they still pass, the tests have stopped testing.
+
 Foundry is at `/home/openhands/.foundry/bin`; add it to `PATH` if `forge` is missing. It is
 **not** installed by default in a fresh environment — the toolchain is ephemeral and vanishes
 between sessions while the checkout survives, so `forge test` failing with "command not found"

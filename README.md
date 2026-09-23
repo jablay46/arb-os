@@ -88,6 +88,7 @@ src/
   libraries/Errors.sol         custom errors
 test/
   MorphoArbExecutor.t.sol      25 unit tests across all three providers
+  MorphoArbProperty.t.sol      9 property + sabotage tests for the profit invariant
   fork/MorphoArbFork.t.sol     13 tests against live Base deployments
   fork/CrossDexFork.t.sol      4 cross-DEX tests (Aerodrome <-> Uniswap V3)
   mocks/                       ERC20, provider stand-ins, mock adapter
@@ -181,7 +182,7 @@ check that the repayment mechanisms are wired to reality rather than to what the
 believe reality is -- it is what caught the V3 callback-encoding bug.
 
 ```bash
-forge test                        # all 42: fork tests use Base's public RPC by default
+forge test                        # all 51: fork tests use Base's public RPC by default
 forge test --match-path 'test/fork/*' -vv
 ```
 
