@@ -70,9 +70,9 @@ library Types {
     ///        must `transfer` the tokens back itself. `feeAmounts` is always zero.
     ///        Callback: `receiveFlashLoan`.
     ///      - `BalancerV3`: the Vault credits a transient delta inside `unlock`; the executor
-    ///        must `transfer` to the Vault then call `settle(token, amountHint)`. Fee comes
-    ///        from `getFlashLoanFeePercentage()` and is expected to be zero.
-    ///        Callback: `unlockCallback`.
+    ///        must `transfer` to the Vault then call `settle(token, amountHint)`. There is no
+    ///        flash-loan fee at all in V3, so nothing is added to the repayment.
+    ///        Callback: `unlockCallback`, reached via `unlock(abi.encodeCall(...))`.
     enum LoanProvider {
         Morpho,
         BalancerV2,

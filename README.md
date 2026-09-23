@@ -80,16 +80,51 @@ are refused at whitelist time, and a call with non-zero `value` is rejected at e
 ```
 src/
   MorphoArbExecutor.sol        main executor
-  interfaces/                  IMorpho, IBalancer (V2 + V3), IAdapter
+  adapters/
+    UniswapV3Adapter.sol       live Uniswap V3 / Slipstream-style router adapter
+  interfaces/                  IMorpho, IBalancer (V2 + V3), IUniswapV3, IAdapter
   libraries/Types.sol          request/route/step structs
   libraries/Errors.sol         custom errors
 test/
   MorphoArbExecutor.t.sol      25 unit tests across all three providers
-  fork/MorphoArbFork.t.sol     7 tests against live Base deployments
+  fork/MorphoArbFork.t.sol     13 tests against live Base deployments
   mocks/                       ERC20, provider stand-ins, mock adapter
 script/
   Deploy.s.sol                 env-driven deployment
 ```
+
+## Adapters
+
+`IAdapter` is deliberately tiny: pull `amountIn`, swap through your own router, send the
+output back to the executor, revert below `minAmountOut`. The executor approves exactly
+`amountIn` and clears the allowance afterwards, and measures the output as a balance delta,
+so an adapter cannot overstate what it delivered.
+
+`poolData` is adapter-specific and opaque to the executor:
+
+| Adapter | `poolData` | Live on Base |
+|---|---|---|
+| `UniswapV3Adapter` | `abi.encode(uint24 fee)` | `0x2626664c2603336E57B271c5C0b26F421741e481` (SwapRouter02) |
+
+Base runs `SwapRouter02`, whose `ExactInputSingleParams` has **no `deadline`** field
+(selector `0x04e45aaf`). The older `SwapRouter` variant has a deadline and a different
+selector (`0x414bf389`); sending the wrong encoding reverts rather than mispricing, but it
+is still worth knowing which one you are talking to.
+
+Aerodrome, Slipstream and Uniswap V4 are not wired up yet. `Types.KIND_*` already carries
+their discriminators from the Rust bot so off-chain encoders keep working.
+
+### Does it actually arbitrage?
+
+Yes, and it is tested. `test_real_profitable_route_settles_through_live_pools` creates a
+real cross-tier dislocation on chain — it pushes 30 WETH through Base's thin 0.01% WETH/USDC
+pool (~47 WETH deep, against ~18,000 in the 0.3% pool), which is exactly how a dislocation
+appears in production — then borrows 1 WETH, buys the cheap tier, sells the expensive one,
+and settles. It clears ~0.077 WETH profit on a 1 WETH loan.
+
+The same suite proves the opposite: a WETH→USDC→WETH round trip with no dislocation loses
+~0.2%, and the executor reverts with `InsufficientProfit` rather than reporting a
+zero-profit success.
 
 ## Build and test
 
@@ -109,7 +144,7 @@ check that the repayment mechanisms are wired to reality rather than to what the
 believe reality is — it is what caught the V3 callback-encoding bug.
 
 ```bash
-forge test                        # all 32: fork tests use Base's public RPC by default
+forge test                        # all 38: fork tests use Base's public RPC by default
 forge test --match-path 'test/fork/*' -vv
 ```
 

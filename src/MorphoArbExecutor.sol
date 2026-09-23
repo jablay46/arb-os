@@ -250,6 +250,9 @@ contract MorphoArbExecutor is
         _runRoute(request);
 
         // The Vault re-reads its own balance, so the loan must be transferred, not approved.
+        // The floor is checked first: a bare `transfer` of an unaffordable amount reverts
+        // with an empty ERC20 error, which would hide the real cause from the operator.
+        _requireRepayable(request);
         IERC20(_loanToken).safeTransfer(balancerV2Vault, _loanAmount + _loanFee);
         _settleProfit(request);
     }
@@ -269,8 +272,10 @@ contract MorphoArbExecutor is
         _runRoute(request);
 
         // V3 tracks a transient delta per token: the balance has to reach the Vault and then
-        // be declared with `settle`, or the lock will not be released.
+        // be declared with `settle`, or the lock will not be released. As on the V2 path,
+        // check the floor before moving money so the failure reason survives.
         uint256 owed = _loanAmount + _loanFee;
+        _requireRepayable(request);
         IERC20(_loanToken).safeTransfer(balancerV3Vault, owed);
         IBalancerV3Vault(balancerV3Vault).settle(_loanToken, owed);
 
@@ -337,6 +342,22 @@ contract MorphoArbExecutor is
     // Profit accounting
     // ---------------------------------------------------------------------
 
+    /// @dev The repayable check, run by the Balancer callbacks before any money moves. A bare
+    ///      `transfer` of an unaffordable amount reverts with an empty ERC20 error, which would
+    ///      hide the real cause from the operator; this turns that into a named error.
+    ///
+    ///      Deliberately uses the same `required`/`available` figures as `_settleProfit`, so a
+    ///      floor violation reports identical numbers no matter which of the two catches it.
+    ///      The debt is always still held at this point, on every provider.
+    function _requireRepayable(Types.ExecutionRequest memory request) internal view {
+        uint256 balance = IERC20(_loanToken).balanceOf(address(this));
+        uint256 owed = _loanAmount + _loanFee;
+        uint256 available = balance > owed ? balance - owed : 0;
+        uint256 required = _balanceBeforeLoan + request.minProfit;
+
+        if (available < required) revert Errors.InsufficientProfit(required, available);
+    }
+
     /// @dev Profit is measured as "tokens the contract owns beyond what it started with",
     ///      which requires excluding the loan that must still be repaid. The three providers
     ///      settle repayment at different moments, so the exclusion differs:
@@ -352,16 +373,12 @@ contract MorphoArbExecutor is
     ///      reported as a zero-profit success.
     function _settleProfit(Types.ExecutionRequest memory request) internal {
         uint256 balance = IERC20(_loanToken).balanceOf(address(this));
-        uint256 required = _balanceBeforeLoan + request.minProfit;
 
         // Morpho still holds the loan, so it is not the contract's to spend.
         uint256 retained = _provider == Types.LoanProvider.Morpho ? _loanAmount + _loanFee : 0;
+        uint256 netBalance = balance > retained ? balance - retained : 0;
 
-        // A route that cannot even cover the repayment reports zero net rather than
-        // underflowing, so the caller sees InsufficientProfit instead of a panic.
-        if (balance < retained) revert Errors.InsufficientProfit(required, 0);
-
-        uint256 netBalance = balance - retained;
+        uint256 required = _balanceBeforeLoan + request.minProfit;
         if (netBalance < required) revert Errors.InsufficientProfit(required, netBalance);
 
         uint256 profit = netBalance - _balanceBeforeLoan;
