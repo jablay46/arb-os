@@ -29,11 +29,13 @@ import { base } from "viem/chains";
 import { loadConfig, ADDR, adapterEnvVar, adapterFor, type VenueConfig } from "./config.js";
 import { RpcClient, CallReverted } from "./rpc.js";
 import { buildVenue, type VenueRuntime } from "./venues.js";
-import { rankedOpportunities, scanVenues, type Opportunity } from "./discovery.js";
+import { rankedOpportunities, scanVenues, bestCandidate, type Opportunity } from "./discovery.js";
 import { fetchGasPrice, fetchL1FeeUpperBound } from "./gas.js";
 import { buildRoute, encodeExecute, type ExecutionRequest } from "./abi.js";
 import { decodeRevert, isExpectedRefusal } from "./errors.js";
 import { preflight, type PreflightResult } from "./preflight.js";
+import { openJournal, type Journal } from "./journal.js";
+import { providerName } from "./settlement.js";
 import { execute } from "./wire.js";
 import {
   assertLiveArmed,
@@ -191,6 +193,11 @@ async function main(): Promise<void> {
     ? createWalletClient({ account, chain: base, transport: http(cfg.rpcUrl) })
     : null;
 
+  const journal = openJournal(cfg.journalFile);
+  if (journal.enabled) {
+    console.log(`journal: ${cfg.journalFile} (append-only JSONL)`);
+  }
+
   const runOnce = async (): Promise<boolean> => {
     const block = await rpc.blockNumber();
     const [gasPriceWei, l1FeeWei] = await Promise.all([
@@ -200,8 +207,25 @@ async function main(): Promise<void> {
     if (l1FeeWei === null) throw new Error("L1 fee oracle unreadable; skipping block");
 
     const runtimes = tradable.map((t) => t.runtime);
+    const quoteStart = Date.now();
     const quotes = await scanVenues(rpc, runtimes, cfg.loanAmounts, block, cfg.maxBatchSize);
+    const quoteMs = Date.now() - quoteStart;
     const candidates = rankedOpportunities(cfg.loanAmounts, quotes, cfg.minProfit);
+
+    if (journal.enabled) {
+      const best = bestCandidate(cfg.loanAmounts, quotes);
+      journal.write({
+        kind: "scan",
+        ts: new Date().toISOString(),
+        block,
+        venues: quotes.length,
+        bestMarginWei: best ? best.margin.toString() : null,
+        bestFirst: best ? (runtimes[best.first]?.label ?? null) : null,
+        bestSecond: best ? (runtimes[best.second]?.label ?? null) : null,
+        candidates: candidates.length,
+        quoteMs,
+      });
+    }
 
     if (candidates.length === 0) {
       if (cfg.verbose) {
@@ -230,6 +254,7 @@ async function main(): Promise<void> {
         loanToken: cfg.loanToken,
         tradable,
         rpc,
+        journal,
       });
       if (done) return true;
     }
@@ -274,8 +299,9 @@ async function tryOpportunity(args: {
   loanToken: Address;
   tradable: TradableVenue[];
   rpc: RpcClient;
+  journal: Journal;
 }): Promise<boolean> {
-  const { opp, tradable, loanToken, rpc, operator, executorAddr, pf } = args;
+  const { opp, tradable, loanToken, rpc, operator, executorAddr, pf, journal } = args;
 
   const first = tradable[opp.first];
   const second = tradable[opp.second];
@@ -337,6 +363,34 @@ async function tryOpportunity(args: {
       simulationOnly: args.wallet === null,
       slippageBps: SLIPPAGE_BPS,
     });
+    journal.write({
+      kind: "simulate",
+      ts: new Date().toISOString(),
+      block: args.block,
+      label,
+      loanAmountWei: opp.loanAmount.toString(),
+      projectedGrossWei: opp.grossProfit.toString(),
+      projectedNetWei: result.projectedNetWei.toString(),
+      gasUnits: result.gasUnits.toString(),
+      gasCostWei: result.gasCostWei.toString(),
+      ok: true,
+      refusal: null,
+    });
+    if (result.settlement) {
+      journal.write({
+        kind: "settled",
+        ts: new Date().toISOString(),
+        label,
+        txHash: result.txHash ?? "",
+        loanAmountWei: opp.loanAmount.toString(),
+        projectedNetWei: result.projectedNetWei.toString(),
+        settledProfitWei: result.settlement.profit.toString(),
+        gapWei: (result.projectionGapWei ?? 0n).toString(),
+        provider: providerName(result.settlement.provider),
+        gasUsed: (result.gasUsed ?? 0n).toString(),
+        blockNumber: args.block.toString(),
+      });
+    }
     return result.simulated;
   } catch (e) {
     if (e instanceof CallReverted) {
@@ -349,6 +403,19 @@ async function tryOpportunity(args: {
             `adapter approvals, and loan-size limits`,
         );
       }
+      journal.write({
+        kind: "simulate",
+        ts: new Date().toISOString(),
+        block: args.block,
+        label,
+        loanAmountWei: opp.loanAmount.toString(),
+        projectedGrossWei: opp.grossProfit.toString(),
+        projectedNetWei: "0",
+        gasUnits: "0",
+        gasCostWei: "0",
+        ok: false,
+        refusal: d.name ?? "unknown",
+      });
       return false;
     }
     throw e;

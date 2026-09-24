@@ -92,7 +92,7 @@ test/
   MorphoArbExecutor.t.sol      25 unit tests across all three providers
   MorphoArbProperty.t.sol      9 property + sabotage tests for the profit invariant
   SlipstreamAdapter.t.sol      11 offline Slipstream encoding + generation tests
-  fork/MorphoArbFork.t.sol     13 tests against live Base deployments
+  fork/MorphoArbFork.t.sol     16 tests against live Base deployments
   fork/CrossDexFork.t.sol      4 cross-DEX tests (Aerodrome <-> Uniswap V3)
   fork/SlipstreamFork.t.sol    7 Slipstream tests, including both live router generations
   mocks/                       ERC20, provider stand-ins, mock adapters, mock Slipstream router
@@ -103,9 +103,13 @@ scanner/
   src/venues.ts                per-DEX quoting (Uniswap V3, Aerodrome, Slipstream CL)
   src/discovery.ts             two-phase cycle search
   src/main.ts                  scan loop
+  src/execute.ts               simulate-first execution bot (journal-ready)
+  src/settlement.ts            decodes the executor's ArbExecuted log from a receipt
+  src/journal.ts               append-only JSONL journal for long runs
   test/                        unit tests + live Aerodrome/Slipstream cross-checks
 script/
   Deploy.s.sol                 env-driven deployment
+  journal-summary.mjs          reduces a journal to scans/simulations/settlements
 ```
 
 ## Adapters
@@ -263,7 +267,7 @@ cannot submit a transaction even by accident.
 ```bash
 BASE_RPC_URL=https://... npm run scan:once      # one scan
 BASE_RPC_URL=https://... npm run scan           # loop every 2s
-npm run test:scanner                            # 46 unit tests, no network
+npm run test:scanner                            # 85 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # 13 tests against Base
 ```
 

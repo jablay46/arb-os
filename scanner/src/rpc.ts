@@ -13,6 +13,19 @@ export interface RpcCall {
   data: string;
 }
 
+/**
+ * The subset of a receipt log needed to decode an event.
+ *
+ * Declared structurally rather than importing viem's `Log`, because this module
+ * deliberately has no viem dependency: it is the raw JSON-RPC layer, and viem
+ * types would only describe what this transport does not itself construct.
+ */
+export interface RpcLog {
+  address: string;
+  topics: string[];
+  data: string;
+}
+
 export interface RpcOptions {
   /** Block tag or number. Pin to one block so every leg prices the same state. */
   block?: string | number;
@@ -385,6 +398,8 @@ export class RpcClient {
     blockNumber: string;
     gasUsed: string;
     transactionHash: string;
+    /** Present for mined transactions; used to read `ArbExecuted` back. */
+    logs?: RpcLog[];
   } | null> {
     return this.single(
       "eth_getTransactionReceipt",

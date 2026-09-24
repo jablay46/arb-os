@@ -20,9 +20,10 @@
 import type { createWalletClient, Address } from "viem";
 import type { privateKeyToAccount } from "viem/accounts";
 
-import type { RpcClient } from "./rpc.js";
+import type { RpcClient, RpcLog } from "./rpc.js";
 import { gasCost } from "./gas.js";
 import { checkLiveGuards, SafetyError, type LiveGuards } from "./safety.js";
+import { decodeSettlement, providerName, projectionGap, type Settlement } from "./settlement.js";
 
 export interface WireInput {
   rpc: RpcClient;
@@ -58,6 +59,12 @@ export interface WireResult {
   txHash?: `0x${string}`;
   /** Realised gas from the receipt, when a transaction was sent. */
   gasUsed?: bigint;
+  /** Projected net profit, in wei: the scanner's edge minus measured gas. */
+  projectedNetWei: bigint;
+  /** Decoded `ArbExecuted`, when a transaction was mined. */
+  settlement?: Settlement;
+  /** `settledProfit - projectedNet`, when a settlement was decoded. */
+  projectionGapWei?: bigint;
 }
 
 /** Pad the estimate so a state change between simulation and inclusion still fits. */
@@ -106,7 +113,13 @@ export async function execute(input: WireInput): Promise<WireResult> {
 
   if (input.simulationOnly) {
     console.log(`  (simulate-only: set LIVE=true to broadcast)`);
-    return { simulated: true, submitted: false, gasUnits, gasCostWei: measuredCostWei };
+    return {
+      simulated: true,
+      submitted: false,
+      gasUnits,
+      gasCostWei: measuredCostWei,
+      projectedNetWei: projectedNet,
+    };
   }
 
   if (!input.wallet || !input.account) {
@@ -150,6 +163,7 @@ export async function execute(input: WireInput): Promise<WireResult> {
       gasUnits,
       gasCostWei: measuredCostWei,
       txHash,
+      projectedNetWei: projectedNet,
     };
   }
 
@@ -165,6 +179,27 @@ export async function execute(input: WireInput): Promise<WireResult> {
     );
   }
 
+  // Read what actually settled off the receipt rather than reporting the
+  // projection as if it were the outcome. A status-1 receipt with no
+  // `ArbExecuted` means profit moved without being reported, which is worth
+  // saying out loud rather than glossing over.
+  const settlement = decodeSettlement(receipt.logs ?? [], executor) ?? undefined;
+  let projectionGapWei: bigint | undefined;
+  if (settlement) {
+    projectionGapWei = projectionGap(projectedNet, settlement.profit);
+    console.log(
+      `  SETTLED profit=${settlement.profit} wei provider=${providerName(settlement.provider)} ` +
+        `projected=${projectedNet} wei gap=${projectionGapWei} wei`,
+    );
+    if (projectionGapWei < 0n) {
+      console.log(`  note: settled below projection; the pricing model is optimistic here`);
+    }
+  } else {
+    console.log(
+      `  note: no ArbExecuted in the receipt; the realised profit was not reported on chain`,
+    );
+  }
+
   return {
     simulated: true,
     submitted: true,
@@ -172,6 +207,9 @@ export async function execute(input: WireInput): Promise<WireResult> {
     gasCostWei: measuredCostWei,
     txHash,
     gasUsed,
+    projectedNetWei: projectedNet,
+    settlement,
+    projectionGapWei,
   };
 }
 
@@ -193,7 +231,12 @@ async function waitForReceipt(
   rpc: RpcClient,
   hash: `0x${string}`,
   timeoutMs: number,
-): Promise<{ status: string; blockNumber: string; gasUsed: string } | null> {
+): Promise<{
+  status: string;
+  blockNumber: string;
+  gasUsed: string;
+  logs?: RpcLog[];
+} | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const r = await rpc.getTransactionReceipt(hash);

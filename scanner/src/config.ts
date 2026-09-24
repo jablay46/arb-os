@@ -131,6 +131,13 @@ export interface ScanConfig {
   /** Log every candidate, not just the profitable ones. */
   verbose: boolean;
   dryRun: boolean;
+  /**
+   * Path for the append-only JSONL journal, or undefined to disable.
+   *
+   * Unset by default so an ordinary `--once` run writes nothing; a long
+   * simulate run sets it and gets a file it can summarise.
+   */
+  journalFile?: string;
 }
 
 /**
@@ -247,5 +254,6 @@ export function loadConfig(): ScanConfig {
     scanIntervalMs: Number(env("SCAN_INTERVAL_MS") ?? 2_000),
     verbose: env("VERBOSE") === "true",
     dryRun: env("DRY_RUN") !== "false",
+    journalFile: env("JOURNAL_FILE"),
   };
 }

@@ -181,7 +181,7 @@ tests encode which cases the original author considered load-bearing.
 
 ```bash
 BASE_RPC_URL=https://... npm run scan:once
-npm run test:scanner                            # 46 unit tests, no network
+npm run test:scanner                            # 85 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # fork + live tests
 ```
 
@@ -299,6 +299,44 @@ fresh EOA and trade from that instead.
 `test:scanner:live` includes `execute.integration.test.ts`; without `EXECUTOR_ADDRESS` and
 `OPERATOR_ADDRESS` it skips rather than failing. `checkLiveGuards` and `assertLiveArmed` are pure,
 so the gates are tested exhaustively offline — a live test is for wiring, not for logic.
+
+## Settlement read-back and the journal
+
+`settlement.ts` decodes the executor's `ArbExecuted` log so a run reports what a
+route *earned*, not what it predicted; `wire.ts` decodes it from the receipt, and
+`execute.ts` subtracts it from the projection to get the gap. `journal.ts` plus
+`script/journal-summary.mjs` turn a long simulate run into a few readable
+numbers, which is the only way to tell "nothing came close" from "we nearly made
+it" without grepping JSONL by hand.
+
+```bash
+JOURNAL_FILE=/tmp/scan.jsonl BASE_RPC_URL=... npx tsx scanner/src/execute.ts
+npm run journal:summary -- /tmp/scan.jsonl
+```
+
+Two traps, both confirmed by planting a mutation:
+
+- **Unit tests that build the log from the decoder's own shape are tautological.**
+  `settlement.test.ts` pins the field order, but it encodes the same ABI it then
+  checks, so it cannot notice the *contract* emitting the fields in a different
+  order. The cross-language pin is `test/fork/MorphoArbFork.t.sol`:
+  `test_fork_arb_executed_payload_is_profit_then_provider` uses `vm.expectEmit`
+  against the deployed executor. Swapping the two `uint256` in the `emit`
+  arguments makes the byte payload change and that test fails. Verify any change
+  to the event by planting exactly that mutation — the decoder reads positionally,
+  so a transposed emit reports a *loan size* as a profit, a number that looks
+  plausible and is wrong.
+- **Renaming the event's `uint256` fields is not a real mutation.** Both are
+  `uint256`, so the ABI encoding is identical and every test still passes. Only
+  changing the values passed to `emit` (or an indexed slot, or a type) changes the
+  bytes. Do not mistake a green run after a rename for proof the pin works.
+- **Wei amounts go in journals as decimal strings.** A wei value exceeds
+  `Number.MAX_SAFE_INTEGER`, so `JSON.stringify` on a number silently loses
+  precision and the journal lies about profit. `journal.write` stringifies them;
+  keep it that way.
+
+The journal is append-only JSONL and a kill can truncate the final line, so
+`journal-summary.mjs` counts unparseable lines instead of aborting on them.
 
 ## RPC endpoints
 
