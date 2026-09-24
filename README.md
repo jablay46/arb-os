@@ -392,8 +392,6 @@ These are deliberate gaps, not oversights:
 - **Uniswap V4 adapter.** `Types.KIND_UNISWAP_V4` already carries its
   discriminator so off-chain encoders keep working, but the V4 singleton
   architecture needs its own `unlock`/`settle` handling.
-- **The scanner does not price Slipstream yet.** `scanner/src/config.ts` records
-  both router generations' addresses; the venue adapter itself is not written.
 - **`treasury` is a plain admin-set address**, not a splitter or a contract with
   its own withdrawal logic.
 - **The bot trades a single route at a time**, and takes no view on how to split a
