@@ -15,9 +15,9 @@ predecessor repos (see `ANALISIS-DAN-RENCANA-MERGE.md` for the comparison and ro
 forge install foundry-rs/forge-std@v1.16.2 --no-git   # lib/ is gitignored
 npm ci
 
-forge test --no-match-path "test/fork/*"   # 25 unit tests, no network
+forge test --no-match-path "test/fork/*"   # 45 unit tests, no network
 npx tsc --noEmit                           # scanner types; needs tsconfig.json
-npm run test:scanner                       # 42 offline scanner tests
+npm run test:scanner                       # 46 offline scanner tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly the four commands above. It never runs the fork or
@@ -106,6 +106,11 @@ cast call <router> "defaultFactory()(address)" --rpc-url https://mainnet.base.or
 cast sig "swapExactTokensForTokens(uint256,uint256,(address,address,bool,address)[],address,uint256)"
 ```
 
+`SlipstreamAdapter` is an example of the second router generation being a *second deployment*:
+one adapter is bound to one router, whose factory is read from the chain in the constructor,
+and `poolData` carries `(int24 tickSpacing, address factory)` so a cross-generation leg
+reverts instead of silently filling from the wrong pool.
+
 Venue-specific traps already hit once:
 
 - **Uniswap V3 on Base is `SwapRouter02`**, whose `ExactInputSingleParams` has **no
@@ -114,6 +119,14 @@ Venue-specific traps already hit once:
 - **Aerodrome pools are `(from, to, stable, factory)`, not fee tiers.** A pair can exist twice
   — volatile and stable — so `stable` is part of the pool identity. WETH/USDC has both on
   Base, and the stable one holds ~2 WETH against ~1,657 in the volatile pool.
+- **Aerodrome runs two Slipstream CL generations on Base, and both are live.** Each has its
+  own factory, router and quoter; a router only swaps against pools minted by its own
+  factory. The two routers share `exactInputSingle` selector `0xa026383e`, so the generation
+  is decided by the router *address*, never by calldata. `SlipstreamAdapter` reads the
+  router's own `factory()` in its constructor and refuses a leg naming any other factory.
+  This is not theoretical: a quoter from one generation answers the other generation's
+  ts=10 leg with a *plausible* number (~2.0e8 vs the correct ~1.1e9) instead of reverting,
+  because it resolves its own generation's ts=10 pool. See `test/fork/SlipstreamFork.t.sol`.
 
 ## Flash-loan providers
 
@@ -155,7 +168,7 @@ tests encode which cases the original author considered load-bearing.
 
 ```bash
 BASE_RPC_URL=https://... npm run scan:once
-npm run test:scanner                            # 42 unit tests, no network
+npm run test:scanner                            # 46 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # fork + live tests
 ```
 
@@ -206,6 +219,37 @@ Key facts that cost debugging time:
 Aerodrome **stable** pools are refused, not approximated: their curve
 (x³y + y³x = k) is not constant-product. The Rust bot refuses them too.
 
+### Scanner venues are keyed by pricing model, not by DEX name
+
+Discovery dispatches on `VenueRuntime.pricing` (`"quoter"` or `"reserves"`),
+not on `kind`. Uniswap V3 and Slipstream are different DEXes but both are
+quoters, so `kind`-keyed dispatch would have duplicated the same branch; a
+`reserves` venue is read once and priced locally for every size. Adding a CL
+venue should not require touching the scan phases.
+
+Slipstream scanner facts, all verified against Base:
+
+- **The venue derives its factory from the quoter (`quoter.factory()`), and does
+  not accept a factory from config.** Aerodrome runs two CL generations whose
+  quoters share an ABI, so a `(new quoter, old factory)` pair does not revert --
+  the old quoter answers about the old generation's pool of the *same tick
+  spacing* and returns a plausible price. Measured at ts=50: new quoter
+  ~2.656e9 USDC per WETH, old quoter ~2.337e9, a ~12% silent error.
+  `buildVenue` also checks `factory.isPool(pool)`.
+- **A resolved pool is not a liquid pool.** On WETH/USDC the deep pools are
+  old/ts=100 (~1,696 WETH) and new/ts=50 (~1,545 WETH); old/ts=10, old/ts=50,
+  old/ts=200 and new/ts=10 resolve but hold well under a WETH, and new/ts=100
+  and new/ts=200 do not exist. The thin ones quote a 1 WETH trade at a fraction
+  of market, which the profit math would report as an opportunity, so
+  `defaultVenues` excludes them deliberately. Measure depth before adding one.
+- **The quoter selectors differ.** Slipstream is
+  `quoteExactInputSingle((address,address,uint256,int24,uint160))` = `0x9e7defe6`;
+  Uniswap V3 is the `uint24` variant = `0xc6a5026a`. Slipstream's third word is
+  `tickSpacing`, not a fee tier.
+- `scanner/test/slipstream.integration.test.ts` covers all of the above. It is
+  skipped without `BASE_RPC_URL`, so it is in `test:scanner:live`, not the
+  offline suite.
+
 ## RPC endpoints
 
 Base RPCs used in this repo. A token in a URL is a secret: keep it in
@@ -230,7 +274,7 @@ Two different requirements, and mixing them up produces a confusing failure:
   Use Alchemy for `forge test --match-path "test/fork/*"`.
 
   "Historical" is relative: the default `BASE_FORK_BLOCK` (51668376) sits well
-  inside a pruned full node's window, so `mainnet.base.org` ran all 17 fork
+  inside a pruned full node's window, so `mainnet.base.org` ran all 24 fork
   tests against it without archive access. Only a block older than the node's
   retention needs an archive endpoint, so raise `BASE_FORK_BLOCK` deliberately
   if you raise it at all.

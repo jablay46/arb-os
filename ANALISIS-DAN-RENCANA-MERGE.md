@@ -289,9 +289,20 @@ rasa aman yang salah.
 
 ### 5.3 Yang masih terbuka
 
-- **Adapter DEX sudah dua.** `UniswapV3Adapter` dan `AerodromeAdapter` sudah jalan lewat
-  router asli. Slipstream dan Uniswap V4 belum. Diskriminator `Types.KIND_*` sudah ada sejak
-  awal supaya encoder off-chain tidak perlu berubah saat adapter ditambah.
+- **Adapter DEX sudah tiga keluarga.** `UniswapV3Adapter`, `AerodromeAdapter`, dan
+  `SlipstreamAdapter` sudah jalan lewat router asli. Uniswap V4 belum. Diskriminator
+  `Types.KIND_*` sudah ada sejak awal supaya encoder off-chain tidak perlu berubah saat
+  adapter ditambah.
+
+  **Status: Slipstream selesai.** Aerodrome men-*migrasi* CL ke factory kedua, jadi Base
+  punya **dua** generasi Slipstream yang sama-sama hidup. Keduanya memakai selector
+  `exactInputSingle` yang sama (`0xa026383e`), sehingga generasi ditentukan oleh alamat
+  router, bukan oleh calldata. `SlipstreamAdapter` membaca `factory()` router di konstruktor
+  dan menolak leg yang menyebut factory generasi lain — tanpa itu, leg yang salah generasi
+  tetap "berhasil" tapi terisi dari pool generasi lain dengan harga berbeda (terukur di Base:
+  quoter generasi lama menjawab leg ts=10 milik generasi baru dengan ~2.0e8, padahal yang
+  benar ~1.1e9). Satu adapter = satu router; generasi kedua = deploy kedua. Bukti ada di
+  `test/fork/SlipstreamFork.t.sol` (7 test) dan `test/SlipstreamAdapter.t.sol` (11 test).
 - **Belum ada scanner off-chain.** Port discovery dari repo A/Rust (fase 2–3) belum dimulai.
   Saat ini route harus disuplai manual; tidak ada yang mencari peluang sendiri.
 
@@ -337,9 +348,13 @@ menambah kemampuan. Jangan lompat ke adapter baru atau ML sebelum dua ini selesa
    `BASE_RPC_URL` di CI, karena secret di CI adalah kebocoran yang menunggu terjadi.
    `tsconfig.json` belum ada, jadi `tsx` hanya transpile tanpa type-check; menambahkannya
    menutup celah itu.
-5. **Adapter Slipstream dan Uniswap V4.** Kerjakan setelah 1–4. Keduanya butuh fork test
-   sendiri terhadap bytecode asli, dan V4 memakai arsitektur singleton yang berbeda sehingga
-   encoding pool-nya bukan fee tier.
+5. **Adapter Uniswap V4.** Kerjakan setelah 1–4. V4 memakai arsitektur singleton yang
+   berbeda sehingga encoding pool-nya bukan fee tier, dan settlement-nya butuh
+   `unlock`/`settle` sendiri.
+
+   **Slipstream sudah selesai** (lihat §5.3): dua generasi CL Base ditangani oleh dua
+   deploy `SlipstreamAdapter`, masing-masing terikat ke satu router dan memvalidasi
+   `factory()`-nya.
 6. **Unpin fork test untuk pemantauan peluang nyata.** Pin blok membuat suite deterministik,
    tapi berarti angka profit hanya berlaku untuk satu blok. Untuk pemantauan, lepas
    `BASE_FORK_BLOCK` dan pakai RPC arsip.

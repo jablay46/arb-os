@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 
 import { getAmountOut, orientReserves, Unquotable } from "../src/math.js";
 import { rankedOpportunities, bestCandidate } from "../src/discovery.js";
+import { SlipstreamVenue } from "../src/venues.js";
 
 const WETH = "0x4200000000000000000000000000000000000006";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -239,4 +240,72 @@ test("leg provenance reaches the opportunity for each leg independently", () => 
   assert.equal(opps.length, 1);
   assert.equal(opps[0]!.leg1.local, false, "venue 0 leg 1 was quoter-sourced");
   assert.equal(opps[0]!.leg2.local, false, "venue 1 leg 2 was quoter-sourced");
+});
+
+
+// --- Slipstream venue encoding -------------------------------------------
+
+test("Slipstream encodes tickSpacing where Uniswap V3 encodes a fee", () => {
+  // The two CL venues share a quoter ABI shape but not a pool descriptor: the
+  // third word is int24 for Slipstream and uint24 for Uniswap V3, so the two
+  // selectors differ (0x9e7defe6 vs 0xc6a5026a). Sending the wrong one would
+  // revert, or resolve a pool nobody meant to price.
+  const venue = new SlipstreamVenue(
+    "slip",
+    WETH,
+    USDC,
+    100,
+    "0x0000000000000000000000000000000000000bbb",
+    "0x0000000000000000000000000000000000000aaa",
+  );
+  const call = venue.encodeQuote(10n ** 18n, "loanToQuote");
+
+  assert.equal(call.to.toLowerCase(), "0x0000000000000000000000000000000000000bbb");
+  assert.equal(call.data.slice(0, 10), "0x9e7defe6", "Slipstream quotes via int24 tickSpacing");
+});
+
+test("Slipstream reverses the tokens for the return leg", () => {
+  // A venue that only ever quoted loanToQuote would price leg 2 on leg 1's
+  // curve, turning every round trip into a 100% loss. The arg order is the
+  // observable difference between the two directions.
+  const venue = new SlipstreamVenue("slip", WETH, USDC, 100, "0xbb", "0xaa");
+  const forward = venue.encodeQuote(10n ** 18n, "loanToQuote").data;
+  const back = venue.encodeQuote(10n ** 18n, "quoteToLoan").data;
+  assert.notEqual(forward, back, "the two directions must produce different calldata");
+
+  const words = (data: string) => {
+    const body = data.slice(10);
+    return Array.from({ length: body.length / 64 }, (_, i) => body.slice(i * 64, (i + 1) * 64));
+  };
+  const f = words(forward);
+  const b = words(back);
+  assert.equal(f[0]!.slice(24).toLowerCase(), WETH.slice(2).toLowerCase(), "forward tokenIn is WETH");
+  assert.equal(f[1]!.slice(24).toLowerCase(), USDC.slice(2).toLowerCase(), "forward tokenOut is USDC");
+  assert.equal(b[0]!.slice(24).toLowerCase(), USDC.slice(2).toLowerCase(), "return tokenIn is USDC");
+  assert.equal(b[1]!.slice(24).toLowerCase(), WETH.slice(2).toLowerCase(), "return tokenOut is WETH");
+});
+
+test("Slipstream decodes the first of the quoter's four words", () => {
+  const venue = new SlipstreamVenue("slip", WETH, USDC, 100, "0xbb", "0xaa");
+  const amountOut = 123456789n;
+  const raw =
+    "0x" +
+    amountOut.toString(16).padStart(64, "0") +
+    "0".repeat(64) +
+    "0".repeat(64) +
+    "0".repeat(64);
+  assert.equal(venue.decodeQuote(raw), amountOut);
+
+  // Reading the whole blob as one integer would yield a number near 1e75 and
+  // flow into profit math as if it were real. A truncated result must be
+  // rejected rather than misread.
+  assert.equal(venue.decodeQuote("0x" + "0".repeat(64)), null);
+  assert.equal(venue.decodeQuote("0x"), null);
+});
+
+test("Slipstream is a quoter venue and never claims local reserves", () => {
+  const venue = new SlipstreamVenue("slip", WETH, USDC, 100, "0xbb", "0xaa");
+  assert.equal(venue.pricing, "quoter", "discovery must route it through the quoter path");
+  assert.throws(() => venue.decodeReserves(), Unquotable);
+  assert.equal(venue.quoteFromReserves(), null);
 });
