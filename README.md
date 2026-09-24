@@ -81,17 +81,21 @@ are refused at whitelist time, and a call with non-zero `value` is rejected at e
 src/
   MorphoArbExecutor.sol        main executor
   adapters/
-    UniswapV3Adapter.sol       live Uniswap V3 / Slipstream-style router adapter
+    UniswapV3Adapter.sol       live Uniswap V3 SwapRouter02 adapter
     AerodromeAdapter.sol       live Aerodrome router adapter (stable + volatile)
-  interfaces/                  IMorpho, IBalancer (V2 + V3), IUniswapV3, IAerodrome, IAdapter
+    SlipstreamAdapter.sol      live Aerodrome Slipstream CL adapter (one per router generation)
+  interfaces/                  IMorpho, IBalancer (V2 + V3), IUniswapV3, IAerodrome,
+                               ISlipstream, IAdapter
   libraries/Types.sol          request/route/step structs
   libraries/Errors.sol         custom errors
 test/
   MorphoArbExecutor.t.sol      25 unit tests across all three providers
   MorphoArbProperty.t.sol      9 property + sabotage tests for the profit invariant
+  SlipstreamAdapter.t.sol      11 offline Slipstream encoding + generation tests
   fork/MorphoArbFork.t.sol     13 tests against live Base deployments
   fork/CrossDexFork.t.sol      4 cross-DEX tests (Aerodrome <-> Uniswap V3)
-  mocks/                       ERC20, provider stand-ins, mock adapter
+  fork/SlipstreamFork.t.sol    7 Slipstream tests, including both live router generations
+  mocks/                       ERC20, provider stand-ins, mock adapters, mock Slipstream router
 scanner/
   src/config.ts                venues, loan sizes, thresholds
   src/rpc.ts                   batched JSON-RPC with retry
@@ -134,8 +138,15 @@ the volatile pool, so routing to the wrong one is an expensive mistake. Pass
 was priced for, so a deadline adds no protection a block builder cannot already give itself;
 the adapter passes `block.timestamp` to satisfy the router's own check.
 
-Slipstream and Uniswap V4 are not wired up yet. `Types.KIND_*` already carries their
-discriminators from the Rust bot so off-chain encoders keep working.
+Slipstream is wired up, and it is the one venue that needs **two** adapters on Base. Aerodrome
+runs two concentrated-liquidity router generations, both live, each with its own factory and
+router. The two routers share the `exactInputSingle` selector (`0xa026383e`), so a leg's
+generation is decided purely by which router address it is mounted on; the adapter reads the
+router's own `factory()` in its constructor, and `poolData` carries
+`abi.encode(int24 tickSpacing, address factory)` so a leg that names the other generation's
+factory reverts instead of silently filling from the other generation's pool. Uniswap V4 is not
+wired up yet; `Types.KIND_UNISWAP_V4` already carries its discriminator from the Rust bot so
+off-chain encoders keep working.
 
 ### Does it actually arbitrage?
 
@@ -147,6 +158,7 @@ dislocation the way one appears in production -- by pushing a large trade throug
 |---|---|---|
 | Uniswap V3 0.05% -> 0.01% | 30 WETH through the 0.01% pool (~47 WETH deep) | ~0.079 WETH |
 | Uniswap V3 -> Aerodrome volatile | 250 WETH through Aerodrome (~1,657 WETH deep) | ~0.314 WETH |
+| Uniswap V3 0.01% -> Slipstream ts=100 | 30 WETH through the 0.01% pool | ~0.079 WETH |
 
 The same suites prove the opposite: a round trip with no dislocation loses ~0.2% and the
 executor reverts with `InsufficientProfit` rather than reporting a zero-profit success.
@@ -163,7 +175,7 @@ Foundry reports as `could not instantiate forked environment` -- a message that
 reads like a broken URL rather than a plan limit. Use an archive-capable
 endpoint for `forge test --match-path "test/fork/*"`; that requirement only
 bites for a block older than the node's retention, and the default fork block
-is recent enough that a public endpoint ran all 17 tests.
+is recent enough that a public endpoint ran all 24 tests.
 
 A public endpoint that accepts batches can still throttle a burst of them,
 answering with HTTP 200 and a per-call `-32016 over rate limit`. The scanner
@@ -336,8 +348,11 @@ These are deliberate gaps, not oversights:
 
 - **No transaction submission from the scanner.** It finds and prices; nothing
   signs. `--execute` does not exist.
-- **Slipstream and Uniswap V4 adapters.** `Types.KIND_*` already carries their
-  discriminators so off-chain encoders keep working.
+- **Uniswap V4 adapter.** `Types.KIND_UNISWAP_V4` already carries its
+  discriminator so off-chain encoders keep working, but the V4 singleton
+  architecture needs its own `unlock`/`settle` handling.
+- **The scanner does not price Slipstream yet.** `scanner/src/config.ts` records
+  both router generations' addresses; the venue adapter itself is not written.
 - **`treasury` is a plain admin-set address**, not a splitter or a contract with
   its own withdrawal logic.
 

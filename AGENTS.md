@@ -15,7 +15,7 @@ predecessor repos (see `ANALISIS-DAN-RENCANA-MERGE.md` for the comparison and ro
 forge install foundry-rs/forge-std@v1.16.2 --no-git   # lib/ is gitignored
 npm ci
 
-forge test --no-match-path "test/fork/*"   # 25 unit tests, no network
+forge test --no-match-path "test/fork/*"   # 45 unit tests, no network
 npx tsc --noEmit                           # scanner types; needs tsconfig.json
 npm run test:scanner                       # 42 offline scanner tests
 ```
@@ -106,6 +106,11 @@ cast call <router> "defaultFactory()(address)" --rpc-url https://mainnet.base.or
 cast sig "swapExactTokensForTokens(uint256,uint256,(address,address,bool,address)[],address,uint256)"
 ```
 
+`SlipstreamAdapter` is an example of the second router generation being a *second deployment*:
+one adapter is bound to one router, whose factory is read from the chain in the constructor,
+and `poolData` carries `(int24 tickSpacing, address factory)` so a cross-generation leg
+reverts instead of silently filling from the wrong pool.
+
 Venue-specific traps already hit once:
 
 - **Uniswap V3 on Base is `SwapRouter02`**, whose `ExactInputSingleParams` has **no
@@ -114,6 +119,14 @@ Venue-specific traps already hit once:
 - **Aerodrome pools are `(from, to, stable, factory)`, not fee tiers.** A pair can exist twice
   — volatile and stable — so `stable` is part of the pool identity. WETH/USDC has both on
   Base, and the stable one holds ~2 WETH against ~1,657 in the volatile pool.
+- **Aerodrome runs two Slipstream CL generations on Base, and both are live.** Each has its
+  own factory, router and quoter; a router only swaps against pools minted by its own
+  factory. The two routers share `exactInputSingle` selector `0xa026383e`, so the generation
+  is decided by the router *address*, never by calldata. `SlipstreamAdapter` reads the
+  router's own `factory()` in its constructor and refuses a leg naming any other factory.
+  This is not theoretical: a quoter from one generation answers the other generation's
+  ts=10 leg with a *plausible* number (~2.0e8 vs the correct ~1.1e9) instead of reverting,
+  because it resolves its own generation's ts=10 pool. See `test/fork/SlipstreamFork.t.sol`.
 
 ## Flash-loan providers
 
@@ -230,7 +243,7 @@ Two different requirements, and mixing them up produces a confusing failure:
   Use Alchemy for `forge test --match-path "test/fork/*"`.
 
   "Historical" is relative: the default `BASE_FORK_BLOCK` (51668376) sits well
-  inside a pruned full node's window, so `mainnet.base.org` ran all 17 fork
+  inside a pruned full node's window, so `mainnet.base.org` ran all 24 fork
   tests against it without archive access. Only a block older than the node's
   retention needs an archive endpoint, so raise `BASE_FORK_BLOCK` deliberately
   if you raise it at all.

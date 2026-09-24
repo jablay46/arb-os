@@ -24,8 +24,16 @@ export const ADDR = {
   AERODROME_FACTORY: "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
   AERODROME_ROUTER: "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
 
-  /** Aerodrome Slipstream (concentrated liquidity) */
-  SLIPSTREAM_FACTORY: "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A",
+  /** Aerodrome Slipstream (concentrated liquidity). Two live generations on
+   * Base; each pairs its own factory with its own router and quoter. A leg
+   * priced against one generation's pool must execute through the same
+   * generation's router. */
+  SLIPSTREAM_FACTORY_OLD: "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A",
+  SLIPSTREAM_ROUTER_OLD: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+  SLIPSTREAM_QUOTER_OLD: "0x254cF9E1E6e233aa1AC962CB9B05b2cfeAaE15b0",
+  SLIPSTREAM_FACTORY_NEW: "0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef",
+  SLIPSTREAM_ROUTER_NEW: "0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F",
+  SLIPSTREAM_QUOTER_NEW: "0x514c8B5f54112481E28028F1166Bd78501089259",
 
   /** Executor deployed from this repo (set after deployment). */
   EXECUTOR: "0x0000000000000000000000000000000000000000",
