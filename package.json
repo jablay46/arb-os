@@ -11,7 +11,7 @@
     "scan": "tsx scanner/src/main.ts",
     "scan:once": "tsx scanner/src/main.ts --once",
     "test:scanner": "tsx --test scanner/test/scanner.test.ts scanner/test/gas.test.ts scanner/test/rpc.test.ts",
-    "test:scanner:live": "tsx --test scanner/test/gas.integration.test.ts scanner/test/aerodrome.integration.test.ts scanner/test/net.e2e.test.ts"
+    "test:scanner:live": "tsx --test scanner/test/gas.integration.test.ts scanner/test/aerodrome.integration.test.ts scanner/test/slipstream.integration.test.ts scanner/test/net.e2e.test.ts"
   },
   "keywords": [],
   "author": "",

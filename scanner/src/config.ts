@@ -39,7 +39,7 @@ export const ADDR = {
   EXECUTOR: "0x0000000000000000000000000000000000000000",
 } as const satisfies Record<string, Address>;
 
-export type VenueKind = "uniswap-v3" | "aerodrome";
+export type VenueKind = "uniswap-v3" | "aerodrome" | "slipstream";
 
 /**
  * A venue the scanner prices. `tokens` is the pair being arbitraged against
@@ -59,6 +59,17 @@ export interface VenueConfig {
   stable?: boolean;
   /** Aerodrome only: fee in bps, verified against the factory at startup. */
   feeBps?: number;
+  /**
+   * Slipstream only: the pool's `tickSpacing`, which is a Slipstream pool's
+   * identity in place of a V3 fee tier.
+   */
+  tickSpacing?: number;
+  /**
+   * Slipstream only: the generation's `QuoterV2`. The factory is read from this
+   * contract at startup rather than configured, so a quoter can never be paired
+   * with the other generation's factory.
+   */
+  quoter?: Address;
   /** Address of the deployed adapter contract for this venue. */
   adapter?: Address;
 }
@@ -85,7 +96,25 @@ export interface ScanConfig {
   dryRun: boolean;
 }
 
-/** Default venue set: two Uniswap V3 fee tiers and the Aerodrome volatile pool. */
+/**
+ * Default venue set.
+ *
+ * The Slipstream entries were chosen by measuring depth on chain, because
+ * "the factory resolves a pool" does not mean "the pool holds liquidity", and a
+ * thin pool prices any usable size absurdly. At block ~51739220 the WETH/USDC
+ * Slipstream pools held:
+ *
+ *   old generation: ts=1 ~47.6 WETH, ts=10 ~0.28 WETH, ts=50 ~0.73 WETH,
+ *                   ts=100 ~1,696 WETH, ts=200 ~0.04 WETH
+ *   new generation: ts=1 ~25.9 WETH, ts=10 ~0.77 WETH, ts=50 ~1,545 WETH
+ *                   (ts=100 and ts=200 do not exist)
+ *
+ * So the deep pools are old/ts=100 and new/ts=50. The rest are excluded
+ * deliberately: a pool holding under a WETH quotes a 1 WETH trade at a
+ * fraction of market, which the profit math would report as a genuine
+ * opportunity. Configuring one of them would produce confident false positives,
+ * so adding a thin pool should be a measured decision, not a default.
+ */
 export function defaultVenues(): VenueConfig[] {
   return [
     {
@@ -112,6 +141,20 @@ export function defaultVenues(): VenueConfig[] {
       token: ADDR.USDC,
       stable: false,
       feeBps: 30,
+    },
+    {
+      kind: "slipstream",
+      label: "slipstream-old-ts100",
+      token: ADDR.USDC,
+      tickSpacing: 100,
+      quoter: ADDR.SLIPSTREAM_QUOTER_OLD,
+    },
+    {
+      kind: "slipstream",
+      label: "slipstream-new-ts50",
+      token: ADDR.USDC,
+      tickSpacing: 50,
+      quoter: ADDR.SLIPSTREAM_QUOTER_NEW,
     },
   ];
 }

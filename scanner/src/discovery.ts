@@ -14,7 +14,7 @@
  * pass would have to guess the intermediate amount, and a guessed amount
  * prices a trade nobody will execute. So:
  *
- *   phase 1 - V2/Aero reserves and leg-1 quotes (one batch)
+ *   phase 1 - Aerodrome reserves and CL leg-1 quotes (one batch)
  *   phase 2 - leg-2 quotes for the distinct leg-1 outputs (one batch)
  *
  * Both phases are pinned to the same block, so every leg prices the same chain
@@ -178,15 +178,15 @@ export async function scanVenues(
     leg2Local: new Map(),
   }));
 
-  // ---- Phase 1: reserves (V2/Aero) + leg-1 quotes (V3) -------------------
+  // ---- Phase 1: reserves (Aerodrome) + leg-1 quotes (CL quoters) --------
   const reserveReqs = venues
     .map((v, i) => ({ v, i }))
-    .filter(({ v }) => v.kind === "aerodrome");
+    .filter(({ v }) => v.pricing === "reserves");
 
   const leg1Reqs: { venue: number; sizeIdx: number; req: { to: string; data: string } }[] = [];
   for (let i = 0; i < venues.length; i++) {
     const v = venues[i]!;
-    if (v.kind !== "uniswap-v3") continue;
+    if (v.pricing !== "quoter") continue;
     for (let s = 0; s < loanAmounts.length; s++) {
       leg1Reqs.push({ venue: i, sizeIdx: s, req: v.encodeQuote(loanAmounts[s]!, "loanToQuote") });
     }
@@ -217,7 +217,7 @@ export async function scanVenues(
     quotes[r.venue]!.leg1Local[r.sizeIdx] = false;
   });
 
-  // V2/Aerodrome legs are priced locally from reserves: exact, and no RPC.
+  // Aerodrome legs are priced locally from reserves: exact, and no RPC.
   for (const { v, i } of reserveReqs) {
     const q = quotes[i]!;
     for (let s = 0; s < loanAmounts.length; s++) {
@@ -237,7 +237,7 @@ export async function scanVenues(
   if (leg2Inputs.size > 0) {
     const inputs = [...leg2Inputs].map((s) => BigInt(s));
 
-    // V2/Aerodrome leg 2 is local math, in the quote -> loan direction.
+    // Aerodrome leg 2 is local math, in the quote -> loan direction.
     for (const { v, i } of reserveReqs) {
       const q = quotes[i]!;
       for (const amountIn of inputs) {
@@ -247,11 +247,11 @@ export async function scanVenues(
       }
     }
 
-    // V3 leg 2 needs the quoter, in the quote -> loan direction.
+    // CL leg 2 needs the quoter, in the quote -> loan direction.
     const leg2Reqs: { venue: number; amountIn: bigint; req: { to: string; data: string } }[] = [];
     for (let i = 0; i < venues.length; i++) {
       const v = venues[i]!;
-      if (v.kind !== "uniswap-v3") continue;
+      if (v.pricing !== "quoter") continue;
       for (const amountIn of inputs) {
         leg2Reqs.push({ venue: i, amountIn, req: v.encodeQuote(amountIn, "quoteToLoan") });
       }

@@ -100,10 +100,10 @@ scanner/
   src/config.ts                venues, loan sizes, thresholds
   src/rpc.ts                   batched JSON-RPC with retry
   src/math.ts                  constant-product math
-  src/venues.ts                per-DEX quoting (Uniswap V3, Aerodrome)
+  src/venues.ts                per-DEX quoting (Uniswap V3, Aerodrome, Slipstream CL)
   src/discovery.ts             two-phase cycle search
   src/main.ts                  scan loop
-  test/                        unit tests + live Aerodrome cross-check
+  test/                        unit tests + live Aerodrome/Slipstream cross-checks
 script/
   Deploy.s.sol                 env-driven deployment
 ```
@@ -236,8 +236,8 @@ transaction. Execution stays a separate, deliberate step.
 ```bash
 BASE_RPC_URL=https://... npm run scan:once      # one scan
 BASE_RPC_URL=https://... npm run scan           # loop every 2s
-npm run test:scanner                            # 42 unit tests, no network
-BASE_RPC_URL=https://... npm run test:scanner:live   # 8 tests against Base
+npm run test:scanner                            # 46 unit tests, no network
+BASE_RPC_URL=https://... npm run test:scanner:live   # 13 tests against Base
 ```
 
 The search is a two-venue cycle over a shared loan token:
@@ -256,6 +256,22 @@ never existed.
 Loan fees are absent from the profit math on purpose: Morpho Blue and Balancer
 V2/V3 charge nothing on Base, so a cycle's gross profit is just
 `leg2Out - loanAmount`.
+
+Venues are dispatched by pricing model, not by DEX name: `quoter` venues
+(Uniswap V3, Slipstream) are asked the chain for each trade size, and
+`reserves` venues (Aerodrome) are read once and priced locally. The configured
+set is three Uniswap V3 fee tiers, Aerodrome's volatile pool, and the two deep
+Slipstream pools -- old generation ts=100 and new generation ts=50.
+
+**Slipstream's two generations are a scanner problem too, not just an executor
+one.** The two quoters share an ABI, so pointing one generation's quoter at a
+tick spacing that only the other has a pool for does not revert: it prices the
+wrong pool and returns a plausible number (measured ~12% off at ts=50). The
+scanner therefore reads the factory from the quoter itself rather than trusting
+config, and checks `factory.isPool`. It also ignores pools that exist but hold
+no liquidity -- on WETH/USDC, old/ts=10 and several others answer the quoter
+while holding well under a WETH, and a 1 WETH trade through them quotes a
+fraction of market, which the profit math would report as an opportunity.
 
 ### Ranking on net, not gross
 

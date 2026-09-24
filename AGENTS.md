@@ -17,7 +17,7 @@ npm ci
 
 forge test --no-match-path "test/fork/*"   # 45 unit tests, no network
 npx tsc --noEmit                           # scanner types; needs tsconfig.json
-npm run test:scanner                       # 42 offline scanner tests
+npm run test:scanner                       # 46 offline scanner tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly the four commands above. It never runs the fork or
@@ -168,7 +168,7 @@ tests encode which cases the original author considered load-bearing.
 
 ```bash
 BASE_RPC_URL=https://... npm run scan:once
-npm run test:scanner                            # 42 unit tests, no network
+npm run test:scanner                            # 46 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # fork + live tests
 ```
 
@@ -218,6 +218,37 @@ Key facts that cost debugging time:
 
 Aerodrome **stable** pools are refused, not approximated: their curve
 (x³y + y³x = k) is not constant-product. The Rust bot refuses them too.
+
+### Scanner venues are keyed by pricing model, not by DEX name
+
+Discovery dispatches on `VenueRuntime.pricing` (`"quoter"` or `"reserves"`),
+not on `kind`. Uniswap V3 and Slipstream are different DEXes but both are
+quoters, so `kind`-keyed dispatch would have duplicated the same branch; a
+`reserves` venue is read once and priced locally for every size. Adding a CL
+venue should not require touching the scan phases.
+
+Slipstream scanner facts, all verified against Base:
+
+- **The venue derives its factory from the quoter (`quoter.factory()`), and does
+  not accept a factory from config.** Aerodrome runs two CL generations whose
+  quoters share an ABI, so a `(new quoter, old factory)` pair does not revert --
+  the old quoter answers about the old generation's pool of the *same tick
+  spacing* and returns a plausible price. Measured at ts=50: new quoter
+  ~2.656e9 USDC per WETH, old quoter ~2.337e9, a ~12% silent error.
+  `buildVenue` also checks `factory.isPool(pool)`.
+- **A resolved pool is not a liquid pool.** On WETH/USDC the deep pools are
+  old/ts=100 (~1,696 WETH) and new/ts=50 (~1,545 WETH); old/ts=10, old/ts=50,
+  old/ts=200 and new/ts=10 resolve but hold well under a WETH, and new/ts=100
+  and new/ts=200 do not exist. The thin ones quote a 1 WETH trade at a fraction
+  of market, which the profit math would report as an opportunity, so
+  `defaultVenues` excludes them deliberately. Measure depth before adding one.
+- **The quoter selectors differ.** Slipstream is
+  `quoteExactInputSingle((address,address,uint256,int24,uint160))` = `0x9e7defe6`;
+  Uniswap V3 is the `uint24` variant = `0xc6a5026a`. Slipstream's third word is
+  `tickSpacing`, not a fee tier.
+- `scanner/test/slipstream.integration.test.ts` covers all of the above. It is
+  skipped without `BASE_RPC_URL`, so it is in `test:scanner:live`, not the
+  offline suite.
 
 ## RPC endpoints
 
