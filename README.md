@@ -227,11 +227,38 @@ See the header of `script/Deploy.s.sol` for the environment variables. Passing
 `address(0)` for a provider disables it, so a staged rollout that wires only Morpho first
 is supported.
 
+`script/DeployAdapters.s.sol` deploys the venue adapters and approves them on an existing
+executor, and prints the env var name each one belongs in. It deploys adapters only and
+touches no roles, so it cannot take control of an executor it does not already administer.
+
+## Running the bot
+
+`scanner/src/execute.ts` is the execution loop. It defaults to **simulate only**: it
+prices a route, `eth_call`s the real executor from the operator address at the priced
+block, measures gas with `eth_estimateGas`, and reports what it would have done. Nothing
+is signed unless two separate switches are set:
+
+```bash
+EXECUTOR_ADDRESS=0x... OPERATOR_ADDRESS=0x... \
+  ADAPTER_UNISWAP_V3_0_05=0x... ADAPTER_AERODROME_VOLATILE=0x... \
+  npx tsx scanner/src/execute.ts --once
+
+LIVE=true I_UNDERSTAND_THIS_SIGNS_TRANSACTIONS=yes PRIVATE_KEY=0x... \
+  npx tsx scanner/src/execute.ts --once
+```
+
+`PRIVATE_KEY` is read from the environment only, never from a file or an argument, and the
+bot refuses to run if it does not match `OPERATOR_ADDRESS`. A route is broadcast only when
+its net profit after *measured* gas clears `MIN_NET_PROFIT_WEI`, the gas price is below
+`MAX_GAS_PRICE_WEI`, the loan is within `MAX_LOAN_WEI`, and every adapter in it is already
+approved on the executor. `safety.ts` documents the reasoning; there is no bypass flag.
+
 ## Scanner
 
-`scanner/` is the port of the Rust bot's opportunity discovery. It is
-read-only: it prices cycles and prints them, and it cannot submit a
-transaction. Execution stays a separate, deliberate step.
+`scanner/` is the port of the Rust bot's opportunity discovery. Discovery itself
+is read-only: it prices cycles and prints them. Signing lives in a separate
+module (`src/wire.ts`) reached only through `src/execute.ts`, so the pricing path
+cannot submit a transaction even by accident.
 
 ```bash
 BASE_RPC_URL=https://... npm run scan:once      # one scan
@@ -362,8 +389,6 @@ The Rust bot refuses them too.
 
 These are deliberate gaps, not oversights:
 
-- **No transaction submission from the scanner.** It finds and prices; nothing
-  signs. `--execute` does not exist.
 - **Uniswap V4 adapter.** `Types.KIND_UNISWAP_V4` already carries its
   discriminator so off-chain encoders keep working, but the V4 singleton
   architecture needs its own `unlock`/`settle` handling.
@@ -371,6 +396,8 @@ These are deliberate gaps, not oversights:
   both router generations' addresses; the venue adapter itself is not written.
 - **`treasury` is a plain admin-set address**, not a splitter or a contract with
   its own withdrawal logic.
+- **The bot trades a single route at a time**, and takes no view on how to split a
+  loan across venues.
 
 ## Warning
 

@@ -42,6 +42,43 @@ export const ADDR = {
 export type VenueKind = "uniswap-v3" | "aerodrome" | "slipstream";
 
 /**
+ * Adapter address for a venue label, read from the environment.
+ *
+ * Adapters are deployed per operator (the router is immutable inside each one,
+ * so a router upgrade means a new deployment), so hardcoding one operator's
+ * addresses would silently point another's routes at contracts it does not
+ * control. The env var name is derived from the label, so wiring a new venue is
+ * one line rather than a new config path:
+ *
+ *   ADAPTER_UNISWAP_V3_0_05=0x...    for label "uniswap-v3-0.05%"
+ *   ADAPTER_AERODROME_VOLATILE=0x... for label "aerodrome-volatile"
+ *
+ * A venue with no adapter is still scanned but cannot be traded; the execute bot
+ * refuses to start until at least two venues have one.
+ */
+export function adapterFor(label: string): Address | undefined {
+  const raw = process.env[adapterEnvVar(label)]?.trim();
+  if (!raw) return undefined;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(raw)) {
+    throw new Error(`${adapterEnvVar(label)} is not a 20-byte address`);
+  }
+  return raw as Address;
+}
+
+/** Env var name an operator sets for a venue's adapter, for error messages. */
+export function adapterEnvVar(label: string): string {
+  // Collapse runs of non-alphanumeric characters to a single underscore and
+  // trim the ends. Trimming matters: a label like "uniswap-v3-0.05%" ends in
+  // "%", which would otherwise yield a trailing underscore and an env var name
+  // that no operator would guess -- the venue would lose its adapter silently.
+  const slug = label
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+  return `ADAPTER_${slug}`;
+}
+
+/**
  * A venue the scanner prices. `tokens` is the pair being arbitraged against
  * the loan token; the loan token itself is `loanToken` below.
  */
@@ -116,7 +153,7 @@ export interface ScanConfig {
  * so adding a thin pool should be a measured decision, not a default.
  */
 export function defaultVenues(): VenueConfig[] {
-  return [
+  const venues: VenueConfig[] = [
     {
       kind: "uniswap-v3",
       label: "uniswap-v3-0.05%",
@@ -157,6 +194,15 @@ export function defaultVenues(): VenueConfig[] {
       quoter: ADDR.SLIPSTREAM_QUOTER_NEW,
     },
   ];
+
+  // Attach adapters last, from the environment, so the venue list stays a
+  // description of what to scan and the adapters are a separate operator
+  // decision. A missing adapter leaves the venue scannable but untradable.
+  for (const v of venues) {
+    const adapter = adapterFor(v.label);
+    if (adapter) v.adapter = adapter;
+  }
+  return venues;
 }
 
 const env = (k: string): string | undefined => process.env[k]?.trim() || undefined;
