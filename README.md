@@ -161,7 +161,16 @@ archive access. A free-tier endpoint can satisfy the first and refuse the
 second with `403 Archive, Debug and Trace requests are not available`, which
 Foundry reports as `could not instantiate forked environment` -- a message that
 reads like a broken URL rather than a plan limit. Use an archive-capable
-endpoint for `forge test --match-path "test/fork/*"`.
+endpoint for `forge test --match-path "test/fork/*"`; that requirement only
+bites for a block older than the node's retention, and the default fork block
+is recent enough that a public endpoint ran all 17 tests.
+
+A public endpoint that accepts batches can still throttle a burst of them,
+answering with HTTP 200 and a per-call `-32016 over rate limit`. The scanner
+now retries that and, if it persists, fails loudly rather than reporting a scan
+that read nothing as a market with no opportunities. `test:scanner:live`
+against `mainnet.base.org` is therefore flaky by construction; a private RPC
+runs the whole suite cleanly.
 
 ```bash
 # Dependencies are not vendored; install them first.
@@ -215,7 +224,7 @@ transaction. Execution stays a separate, deliberate step.
 ```bash
 BASE_RPC_URL=https://... npm run scan:once      # one scan
 BASE_RPC_URL=https://... npm run scan           # loop every 2s
-npm run test:scanner                            # 33 unit tests, no network
+npm run test:scanner                            # 42 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # 8 tests against Base
 ```
 
@@ -259,10 +268,26 @@ Two behaviours are ported from the Rust bot:
   cannot win and the remaining simulations are wasted RPC calls. On a real
   dislocation, 15 gross candidates reduced to 1 gas-priced.
 
+`rankedOpportunities` and `bestCandidate` are ported too, and their tests along
+with them: the Rust original covers a four-venue market where parity venues
+neither create nor remove the edge, a venue that cannot quote being skipped
+without poisoning the others, and leg provenance reaching the opportunity per
+leg. That last one is load-bearing -- `local=true` is what tells the executor
+to re-validate a leg against the on-chain quoter, so collapsing the two leg
+flags would silently skip re-validation.
+
 The pure comparisons live in `scanner/src/gas.ts` and are unit-tested offline;
 the RPC reads are tested separately against Base. A ranking bug and an RPC bug
 otherwise hide behind each other, and both produce the same symptom: a
 plausible net number that is wrong.
+
+The RPC client itself has offline tests because the failure mode is silent. A
+provider that throttles a burst of `eth_call`s answers with HTTP 200 and a
+per-call `-32016 over rate limit` -- the same shape as a legitimate
+`execution reverted`, which is a normal "skip this size" signal. Treating the
+throttle as a revert makes a scan that read nothing look like a quiet market,
+so only an explicit revert maps to `null`; anything else is retried and then
+raised.
 
 Dry run has no transaction to simulate, so gas is a fixed 400k-unit ceiling
 rather than zero. Pricing it at zero would make the `minProfit` filter run

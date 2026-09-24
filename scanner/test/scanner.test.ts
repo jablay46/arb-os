@@ -189,3 +189,54 @@ test("bestCandidate is null when nothing is pricable", () => {
   const venues = [venueQuotes(0, [null], new Map())];
   assert.equal(bestCandidate([100n], venues), null);
 });
+
+
+test("a four-venue market routes through the dislocated pool", () => {
+  // Two extra venues sit at parity (100 -> 110 -> 100), so they can neither
+  // create nor remove the edge. The profitable cycle must still involve the
+  // dislocated venue, and must still be found.
+  const venues = [
+    venueQuotes(0, [110n], new Map([["110", 100n]])),
+    venueQuotes(1, [100n], new Map([["110", 120n]])), // the dislocation
+    venueQuotes(2, [110n], new Map([["110", 100n]])),
+    venueQuotes(3, [100n], new Map([["110", 100n]])),
+  ];
+  const opps = rankedOpportunities([100n], venues, 0n);
+  assert.ok(opps.length >= 1, "the edge must survive two parity venues");
+  for (const o of opps) {
+    assert.ok(
+      o.first === 1 || o.second === 1,
+      `a profitable route must touch the dislocated venue, got ${o.first}->${o.second}`,
+    );
+  }
+});
+
+test("an unquotable venue skips its pairs without poisoning the others", () => {
+  // venue2 cannot quote leg 1 at all (null). Routes through it are skipped,
+  // routes around it still work: one dead venue degrades a scan rather than
+  // taking it down.
+  const venues = [
+    venueQuotes(0, [110n], new Map([["110", 100n]])),
+    venueQuotes(1, [100n], new Map([["110", 120n]])),
+    venueQuotes(2, [null], new Map([["110", 100n]])),
+  ];
+  const opps = rankedOpportunities([100n], venues, 0n);
+  assert.ok(opps.length >= 1, "the good cycle must still be found");
+  for (const o of opps) {
+    assert.ok(o.first !== 2 && o.second !== 2, "no route may use the dead venue");
+  }
+});
+
+test("leg provenance reaches the opportunity for each leg independently", () => {
+  // local=true means the leg was priced by reserve math, so the executor
+  // re-validates it against the on-chain quoter before trading. Collapsing the
+  // two flags into one would let a locally-priced leg skip re-validation.
+  const venues = [
+    { ...venueQuotes(0, [110n], new Map([["110", 100n]])), leg1Local: [false] },
+    { ...venueQuotes(1, [100n], new Map([["110", 120n]])), leg2Local: new Map([["110", false]]) },
+  ];
+  const opps = rankedOpportunities([100n], venues, 0n);
+  assert.equal(opps.length, 1);
+  assert.equal(opps[0]!.leg1.local, false, "venue 0 leg 1 was quoter-sourced");
+  assert.equal(opps[0]!.leg2.local, false, "venue 1 leg 2 was quoter-sourced");
+});
