@@ -84,6 +84,17 @@ contract MorphoArbForkTest is Test {
         }
     }
 
+    /// @dev Declared so `vm.expectEmit` has a shape to compare against. Kept in step
+    ///      with `MorphoArbExecutor.ArbExecuted` by the tests that use it: if the
+    ///      contract's signature changes, `expectEmit` stops matching and they fail.
+    event ArbExecuted(
+        address indexed initiator,
+        address indexed loanToken,
+        uint256 loanAmount,
+        uint256 profit,
+        Types.LoanProvider provider
+    );
+
     // ------------------------------------------------------------------
     // Preconditions: the addresses are what we think they are
     // ------------------------------------------------------------------
@@ -170,6 +181,63 @@ contract MorphoArbForkTest is Test {
         _requireFork();
         vm.expectRevert();
         IBalancerV3FeeProbe(BALANCER_V3_VAULT).getFlashLoanFeePercentage();
+    }
+
+    // ------------------------------------------------------------------
+    // The settlement event the bot reads back
+    // ------------------------------------------------------------------
+    //
+    // The scanner's `settlement.ts` decodes `ArbExecuted` to report what a route
+    // actually earned instead of what it predicted. That decoder hardcodes the
+    // signature and the field order, so it can drift from Solidity without any
+    // unit test noticing -- the unit tests build the log from the same
+    // hardcoded shape they are checking.
+    //
+    // These tests assert the event against the *deployed executor's* own emit, so
+    // a reordering or retyping of the event fails here. They deliberately do not
+    // restate the signature: `vm.expectEmit` is told which topics to check, which
+    // is what makes it a cross-language pin rather than a tautology.
+
+    /// @dev The topic0 and both indexed slots, from a real execution. `initiator`
+    ///      and `loanToken` are the two indexed words; if either moves or changes
+    ///      type, the declared topics stop matching.
+    function test_fork_arb_executed_topics_match_decoder() public {
+        _requireFork();
+
+        vm.expectEmit(true, true, false, false, address(executor));
+        emit ArbExecuted(operator, WETH, 0, 0, Types.LoanProvider.Morpho);
+
+        vm.prank(operator);
+        executor.execute(_request(Types.LoanProvider.Morpho));
+    }
+
+    /// @dev The non-indexed payload is `(loanAmount, profit, provider)` in that
+    ///      order. The bot reads profit from the second data word, so storing them
+    ///      the other way round would report a loan size as a profit -- a number
+    ///      that looks plausible and is wrong. Check the whole payload, including
+    ///      `provider`, so a retype of the enum is caught too.
+    function test_fork_arb_executed_payload_is_profit_then_provider() public {
+        _requireFork();
+
+        vm.expectEmit(true, true, false, true, address(executor));
+        emit ArbExecuted(operator, WETH, LOAN, TIP, Types.LoanProvider.Morpho);
+
+        vm.prank(operator);
+        executor.execute(_request(Types.LoanProvider.Morpho));
+    }
+
+    /// @dev `provider` is a distinct field per provider, so the same signal is
+    ///      checked on a path whose repayment mechanism differs. A decoder that
+    ///      hardcoded Morpho would look correct on the one provider it was tested
+    ///      against.
+    function test_fork_arb_executed_reports_balancer_v2_provider() public {
+        _requireFork();
+
+        vm.expectEmit(true, true, false, true, address(executor));
+        emit ArbExecuted(operator, WETH, LOAN, TIP, Types.LoanProvider.BalancerV2);
+
+        vm.prank(operator);
+        executor.execute(_request(Types.LoanProvider.BalancerV2));
     }
 
     // ------------------------------------------------------------------

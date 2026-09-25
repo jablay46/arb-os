@@ -200,6 +200,13 @@ export class AerodromeVenue implements VenueRuntime {
     readonly pool: Address,
     readonly stable: boolean,
     readonly feeBps: bigint,
+    /**
+     * The factory that minted `pool`. The adapter encodes it into `poolData`
+     * (`(from, to, stable, factory)`), so it has to travel with the venue rather
+     * than be assumed: a leg naming the wrong factory routes against a pool the
+     * pool address does not describe.
+     */
+    readonly factory: Address = ADDR.AERODROME_FACTORY,
   ) {
     this.loanToken = loanToken;
     this.token = token;

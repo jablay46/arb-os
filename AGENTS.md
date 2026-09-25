@@ -17,7 +17,20 @@ npm ci
 
 forge test --no-match-path "test/fork/*"   # 45 unit tests, no network
 npx tsc --noEmit                           # scanner types; needs tsconfig.json
-npm run test:scanner                       # 46 offline scanner tests
+npm run test:scanner                       # 73 offline scanner tests (incl. execute/safety)
+```
+
+The live bot is started by hand, and defaults to simulating:
+
+```bash
+# simulate only; prints what it would have done
+EXECUTOR_ADDRESS=0x... OPERATOR_ADDRESS=0x... \
+  ADAPTER_UNISWAP_V3_0_05=0x... ADAPTER_AERODROME_VOLATILE=0x... \
+  npx tsx scanner/src/execute.ts --once
+
+# arm it; both switches are required, see safety.ts
+LIVE=true I_UNDERSTAND_THIS_SIGNS_TRANSACTIONS=yes PRIVATE_KEY=0x... \
+  npx tsx scanner/src/execute.ts --once
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly the four commands above. It never runs the fork or
@@ -168,7 +181,7 @@ tests encode which cases the original author considered load-bearing.
 
 ```bash
 BASE_RPC_URL=https://... npm run scan:once
-npm run test:scanner                            # 46 unit tests, no network
+npm run test:scanner                            # 85 unit tests, no network
 BASE_RPC_URL=https://... npm run test:scanner:live   # fork + live tests
 ```
 
@@ -249,6 +262,81 @@ Slipstream scanner facts, all verified against Base:
 - `scanner/test/slipstream.integration.test.ts` covers all of the above. It is
   skipped without `BASE_RPC_URL`, so it is in `test:scanner:live`, not the
   offline suite.
+
+## The live execution bot
+
+`scanner/src/execute.ts` is the loop; `wire.ts` is the only module that signs; `safety.ts` holds
+the gates. The scanner was read-only for most of this repo's life, so the first thing to
+internalise is that **the interlock, not the strategy, is the risky part.**
+
+What cost time here:
+
+- **`execute()`'s selector is `0xe4e5f48f`, not the guessed value.** A wrong selector does not
+  fail loudly: the call lands in the executor's payable fallback and reverts differently. Pin it
+  against `out/` *and* against live bytecode (`execute.integration.test.ts` does both).
+- **The adapter env var name is derived from the venue label, so the slug must be trimmed.**
+  `"uniswap-v3-0.05%"` ends in `%`, and a naive `replace(/[^a-zA-Z0-9]+/g,"_")` yields
+  `ADAPTER_UNISWAP_V3_0_05_` with a trailing underscore. The deploy script printed the same wrong
+  name, so both agreed and the venue quietly fell out of the tradable set. This is why the bot now
+  *names* every venue that failed to resolve an adapter instead of omitting it: a silent omission
+  looks exactly like a thin market.
+- **Never let a local `Map` shadow the imported `adapterFor` helper.** `tsc` renaming the import to
+  `adapterFor2` produced a runtime `adapterFor2 is not a function` that type-checked cleanly.
+- **Anonymous structs silently destroy calldata.** A leg declared as an inline struct has no tuple
+  type to encode against. Use a named struct.
+- **`import.meta` does not exist in the CommonJS output `tsx` produces.** Use `process.env` for
+  environment reads; `import.meta.dirname` is fine only in ESM-only test files.
+- **The executor declares a payable fallback**, so a script casting an `address` to
+  `MorphoArbExecutor` must go through `payable(executor)`, or it will not compile.
+
+Proving it works, without mainnet: fork Base into anvil, deploy the executor and adapters to the
+fork, impersonate a WETH holder via `anvil_setStorageAt` (`anvil_deal` cannot find WETH's slot),
+push a large trade to manufacture the dislocation, then run `execute.ts` in the default simulate
+mode. **Impersonating a pool to push its own price is the trap** — Aerodrome rejects the swap with
+its invariant error (`0xa932492f`, "K") because the pool's own accounting moves under it. Fund a
+fresh EOA and trade from that instead.
+
+`test:scanner:live` includes `execute.integration.test.ts`; without `EXECUTOR_ADDRESS` and
+`OPERATOR_ADDRESS` it skips rather than failing. `checkLiveGuards` and `assertLiveArmed` are pure,
+so the gates are tested exhaustively offline — a live test is for wiring, not for logic.
+
+## Settlement read-back and the journal
+
+`settlement.ts` decodes the executor's `ArbExecuted` log so a run reports what a
+route *earned*, not what it predicted; `wire.ts` decodes it from the receipt, and
+`execute.ts` subtracts it from the projection to get the gap. `journal.ts` plus
+`script/journal-summary.mjs` turn a long simulate run into a few readable
+numbers, which is the only way to tell "nothing came close" from "we nearly made
+it" without grepping JSONL by hand.
+
+```bash
+JOURNAL_FILE=/tmp/scan.jsonl BASE_RPC_URL=... npx tsx scanner/src/execute.ts
+npm run journal:summary -- /tmp/scan.jsonl
+```
+
+Two traps, both confirmed by planting a mutation:
+
+- **Unit tests that build the log from the decoder's own shape are tautological.**
+  `settlement.test.ts` pins the field order, but it encodes the same ABI it then
+  checks, so it cannot notice the *contract* emitting the fields in a different
+  order. The cross-language pin is `test/fork/MorphoArbFork.t.sol`:
+  `test_fork_arb_executed_payload_is_profit_then_provider` uses `vm.expectEmit`
+  against the deployed executor. Swapping the two `uint256` in the `emit`
+  arguments makes the byte payload change and that test fails. Verify any change
+  to the event by planting exactly that mutation — the decoder reads positionally,
+  so a transposed emit reports a *loan size* as a profit, a number that looks
+  plausible and is wrong.
+- **Renaming the event's `uint256` fields is not a real mutation.** Both are
+  `uint256`, so the ABI encoding is identical and every test still passes. Only
+  changing the values passed to `emit` (or an indexed slot, or a type) changes the
+  bytes. Do not mistake a green run after a rename for proof the pin works.
+- **Wei amounts go in journals as decimal strings.** A wei value exceeds
+  `Number.MAX_SAFE_INTEGER`, so `JSON.stringify` on a number silently loses
+  precision and the journal lies about profit. `journal.write` stringifies them;
+  keep it that way.
+
+The journal is append-only JSONL and a kill can truncate the final line, so
+`journal-summary.mjs` counts unparseable lines instead of aborting on them.
 
 ## RPC endpoints
 
